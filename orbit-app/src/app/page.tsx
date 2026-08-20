@@ -14,24 +14,28 @@ type SearchCriteria = {
   rawQuery: string;
 
   budgetMax?: number;
-  budgetMin?: number;
-
   minSurface?: number;
   minBedrooms?: number;
-  minMileage?: number;
-  minPower?: number;
 
   location?: string;
 
   garden?: boolean;
   garage?: boolean;
-  parking?: boolean;
 
   preferredEnergy?: string;
   preferredYear?: number;
 };
 
-type Property = {
+type WebResult = {
+  id: string;
+  title: string;
+  description: string;
+  url: string;
+  position: number;
+  source: string;
+};
+
+type DemoProperty = {
   id: number;
   title: string;
   price: number;
@@ -40,7 +44,6 @@ type Property = {
   bedrooms: number;
   garden: boolean;
   garage: boolean;
-  parking: boolean;
   year: number;
   energy: string;
   image: string;
@@ -48,7 +51,7 @@ type Property = {
   distanceMinutes: number;
 };
 
-type ScoredProperty = Property & {
+type ScoredProperty = DemoProperty & {
   matchScore: number;
   valueScore: number;
   orbitScore: number;
@@ -56,7 +59,7 @@ type ScoredProperty = Property & {
   compromises: string[];
 };
 
-const DEMO_PROPERTIES: Property[] = [
+const DEMO_PROPERTIES: DemoProperty[] = [
   {
     id: 1,
     title: "Maison familiale contemporaine",
@@ -66,13 +69,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 4,
     garden: true,
     garage: true,
-    parking: true,
     year: 2019,
     energy: "B",
     image:
       "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Maison récente avec jardin, garage et grande pièce de vie. Très bon équilibre entre prix et caractéristiques.",
+      "Maison récente avec jardin, garage et grande pièce de vie.",
     distanceMinutes: 8,
   },
   {
@@ -84,13 +86,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 5,
     garden: true,
     garage: true,
-    parking: true,
     year: 2017,
     energy: "B",
     image:
       "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Plus grande et mieux équipée, avec un terrain généreux. Un peu plus chère mais excellente pour une famille.",
+      "Grande maison familiale avec terrain généreux et garage.",
     distanceMinutes: 14,
   },
   {
@@ -102,13 +103,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 4,
     garden: true,
     garage: false,
-    parking: true,
     year: 2021,
     energy: "A",
     image:
       "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Très récente et performante énergétiquement. Le principal compromis est l'absence de garage.",
+      "Maison récente très performante énergétiquement.",
     distanceMinutes: 16,
   },
   {
@@ -120,13 +120,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 4,
     garden: true,
     garage: true,
-    parking: true,
     year: 2015,
     energy: "C",
     image:
       "https://images.unsplash.com/photo-1605146769289-440113cc3d00?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Très bon terrain et garage. Le principal compromis est la distance par rapport au centre de Brest.",
+      "Très bon terrain et garage, légèrement plus éloignée de Brest.",
     distanceMinutes: 23,
   },
   {
@@ -138,13 +137,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 4,
     garden: true,
     garage: true,
-    parking: true,
     year: 2012,
     energy: "C",
     image:
       "https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Très bien située et parfaitement adaptée à la recherche, mais proche du budget maximum.",
+      "Très bonne localisation et excellente adéquation aux critères.",
     distanceMinutes: 7,
   },
   {
@@ -156,13 +154,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 4,
     garden: true,
     garage: true,
-    parking: true,
     year: 2022,
     energy: "A",
     image:
       "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Excellente valeur et très récente, mais légèrement sous la surface minimum recherchée.",
+      "Très récente et très intéressante financièrement.",
     distanceMinutes: 18,
   },
   {
@@ -174,13 +171,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 5,
     garden: true,
     garage: true,
-    parking: true,
     year: 2020,
     energy: "B",
     image:
       "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Très belle configuration familiale avec garage et prestations supérieures.",
+      "Très belle configuration familiale avec prestations supérieures.",
     distanceMinutes: 19,
   },
   {
@@ -192,13 +188,12 @@ const DEMO_PROPERTIES: Property[] = [
     bedrooms: 4,
     garden: true,
     garage: true,
-    parking: true,
     year: 2018,
     energy: "B",
     image:
       "https://images.unsplash.com/photo-1600585154526-990dced4db0d?auto=format&fit=crop&w=1400&q=85",
     description:
-      "Prix intéressant avec de bonnes caractéristiques générales et une marge budgétaire confortable.",
+      "Prix intéressant avec de très bonnes caractéristiques.",
     distanceMinutes: 21,
   },
 ];
@@ -210,138 +205,33 @@ const EXAMPLES = [
   "Find me the best 1440p gaming monitor under €250",
 ];
 
-function cleanNumber(value: string) {
-  const normalized = value
+function formatPrice(price: number) {
+  return new Intl.NumberFormat("fr-FR", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+  }).format(price);
+}
+
+function parseNumber(value: string) {
+  const cleaned = value
     .replace(/\s/g, "")
     .replace(/[€$£]/g, "")
-    .replace(/euros?/gi, "")
     .trim();
 
-  if (!normalized) return undefined;
+  if (!cleaned) return undefined;
 
-  const commaDecimal =
-    normalized.includes(",") && normalized.split(",")[1]?.length <= 2;
+  const normalized = cleaned.includes(",")
+    ? cleaned.replace(/\./g, "").replace(",", ".")
+    : cleaned.replace(/\./g, "");
 
-  const cleaned = commaDecimal
-    ? normalized.replace(/\./g, "").replace(",", ".")
-    : normalized.replace(/,/g, "").replace(/\./g, "");
+  const result = Number(normalized);
 
-  const number = Number(cleaned);
-
-  return Number.isFinite(number) ? number : undefined;
-}
-
-function parseBudget(query: string) {
-  const normalized = query.toLowerCase();
-
-  const maxPatterns = [
-    /(?:under|below|less than|maximum|max|up to|budget(?: of)?|à moins de|moins de|max(?:imum)? de|budget(?: de)?)\s*(\d[\d\s.,]*)\s*(?:€|euros?)?/i,
-    /(\d[\d\s.,]*)\s*(?:€|euros?)\s*(?:maximum|max|ou moins)/i,
-  ];
-
-  for (const pattern of maxPatterns) {
-    const match = normalized.match(pattern);
-
-    if (match?.[1]) {
-      const value = cleanNumber(match[1]);
-
-      if (value) {
-        return { budgetMax: value };
-      }
-    }
-  }
-
-  const euroMatch = normalized.match(/(\d[\d\s.,]*)\s*(?:€|euros?)/i);
-
-  if (euroMatch?.[1]) {
-    const value = cleanNumber(euroMatch[1]);
-
-    if (value) {
-      return { budgetMax: value };
-    }
-  }
-
-  return {};
-}
-
-function parseSurface(query: string) {
-  const normalized = query.toLowerCase();
-
-  const plusMatch = normalized.match(
-    /(\d[\d\s.,]*)\s*(?:m²|m2|sqm)\s*\+/i,
-  );
-
-  if (plusMatch?.[1]) {
-    const value = cleanNumber(plusMatch[1]);
-
-    if (value) {
-      return value;
-    }
-  }
-
-  const minimumMatch = normalized.match(
-    /(?:at least|minimum|min|au moins|minimum de)\s*(\d[\d\s.,]*)\s*(?:m²|m2|sqm)/i,
-  );
-
-  if (minimumMatch?.[1]) {
-    const value = cleanNumber(minimumMatch[1]);
-
-    if (value) {
-      return value;
-    }
-  }
-
-  const genericMatch = normalized.match(
-    /(\d[\d\s.,]*)\s*(?:m²|m2|sqm)/i,
-  );
-
-  if (genericMatch?.[1]) {
-    const value = cleanNumber(genericMatch[1]);
-
-    if (value) {
-      return value;
-    }
-  }
-
-  return undefined;
-}
-
-function parseBedrooms(query: string) {
-  const normalized = query.toLowerCase();
-
-  const match = normalized.match(
-    /(\d+)\s*(?:bedrooms?|bedroom|chambres?|chambre)/i,
-  );
-
-  if (match?.[1]) {
-    return Number(match[1]);
-  }
-
-  return undefined;
-}
-
-function detectLocation(query: string) {
-  const normalized = query.toLowerCase();
-
-  const knownLocations = [
-    "brest",
-    "gouesnou",
-    "guipavas",
-    "plougastel",
-    "plouzané",
-    "plouzane",
-    "bohars",
-    "le relecq-kerhuon",
-    "le relecq kerhuon",
-  ];
-
-  return knownLocations.find((location) =>
-    normalized.includes(location),
-  );
+  return Number.isFinite(result) ? result : undefined;
 }
 
 function detectCategory(query: string): Category {
-  const normalized = query.toLowerCase();
+  const q = query.toLowerCase();
 
   const realEstateTerms = [
     "maison",
@@ -349,8 +239,6 @@ function detectCategory(query: string): Category {
     "appartement",
     "appartements",
     "immobilier",
-    "immobilière",
-    "immobiliere",
     "property",
     "properties",
     "house",
@@ -359,9 +247,7 @@ function detectCategory(query: string): Category {
     "homes",
     "real estate",
     "villa",
-    "villas",
     "terrain",
-    "land",
   ];
 
   const carTerms = [
@@ -376,17 +262,13 @@ function detectCategory(query: string): Category {
     "mercedes",
     "peugeot",
     "renault",
-    "citroën",
-    "citroen",
-    "sportive",
-    "sports car",
     "suv",
+    "sporty car",
   ];
 
   const electronicsTerms = [
     "pc",
     "ordinateur",
-    "ordinateur portable",
     "laptop",
     "écran",
     "ecran",
@@ -398,10 +280,8 @@ function detectCategory(query: string): Category {
     "telephone",
     "gpu",
     "carte graphique",
-    "graphics card",
     "tv",
     "television",
-    "télévision",
   ];
 
   const travelTerms = [
@@ -415,61 +295,123 @@ function detectCategory(query: string): Category {
     "holiday",
   ];
 
-  if (realEstateTerms.some((term) => normalized.includes(term))) {
+  if (realEstateTerms.some((term) => q.includes(term))) {
     return "real_estate";
   }
 
-  if (carTerms.some((term) => normalized.includes(term))) {
+  if (carTerms.some((term) => q.includes(term))) {
     return "car";
   }
 
-  if (electronicsTerms.some((term) => normalized.includes(term))) {
+  if (electronicsTerms.some((term) => q.includes(term))) {
     return "electronics";
   }
 
-  if (travelTerms.some((term) => normalized.includes(term))) {
+  if (travelTerms.some((term) => q.includes(term))) {
     return "travel";
   }
 
   return "unknown";
 }
 
-function parseCriteria(query: string): SearchCriteria {
-  const category = detectCategory(query);
-  const budget = parseBudget(query);
-  const surface = parseSurface(query);
-  const bedrooms = parseBedrooms(query);
+function detectLocation(query: string) {
+  const q = query.toLowerCase();
 
-  const normalized = query.toLowerCase();
+  const locations = [
+    "brest",
+    "gouesnou",
+    "guipavas",
+    "plougastel",
+    "plouzané",
+    "plouzane",
+    "bohars",
+    "le relecq-kerhuon",
+    "le relecq kerhuon",
+  ];
+
+  return locations.find((location) => q.includes(location));
+}
+
+function parseCriteria(query: string): SearchCriteria {
+  const q = query.toLowerCase();
+
+  const category = detectCategory(query);
+
+  let budgetMax: number | undefined;
+
+  const budgetPatterns = [
+    /(?:under|below|less than|maximum|max|up to)\s*(\d[\d\s.,]*)\s*(?:€|euros?)?/i,
+    /(?:à moins de|moins de|max(?:imum)? de|budget de)\s*(\d[\d\s.,]*)\s*(?:€|euros?)?/i,
+    /(\d[\d\s.,]*)\s*(?:€|euros?)\s*(?:maximum|max|ou moins)/i,
+  ];
+
+  for (const pattern of budgetPatterns) {
+    const match = q.match(pattern);
+
+    if (match?.[1]) {
+      budgetMax = parseNumber(match[1]);
+
+      if (budgetMax) break;
+    }
+  }
+
+  if (!budgetMax) {
+    const euroMatch = q.match(
+      /(\d[\d\s.,]*)\s*(?:€|euros?)/i,
+    );
+
+    if (euroMatch?.[1]) {
+      budgetMax = parseNumber(euroMatch[1]);
+    }
+  }
+
+  let minSurface: number | undefined;
+
+  const surfaceMatch = q.match(
+    /(\d[\d\s.,]*)\s*(?:m²|m2|sqm)\s*\+?/i,
+  );
+
+  if (surfaceMatch?.[1]) {
+    minSurface = parseNumber(surfaceMatch[1]);
+  }
+
+  let minBedrooms: number | undefined;
+
+  const bedroomMatch = q.match(
+    /(\d+)\s*(?:bedrooms?|chambres?|chambre)/i,
+  );
+
+  if (bedroomMatch?.[1]) {
+    minBedrooms = Number(bedroomMatch[1]);
+  }
 
   return {
     category,
     rawQuery: query,
-    budgetMax: budget.budgetMax,
-    minSurface: surface,
-    minBedrooms: bedrooms,
+    budgetMax,
+    minSurface,
+    minBedrooms,
     location: detectLocation(query),
     garden:
-      /jardin|garden|yard|terrain/i.test(query) || undefined,
+      /jardin|garden|yard/i.test(query) || undefined,
     garage:
-      /garage|parking couvert|covered parking/i.test(query) || undefined,
-    parking:
-      /parking|stationnement|driveway/i.test(query) || undefined,
+      /garage|parking couvert|covered parking/i.test(query) ||
+      undefined,
     preferredEnergy:
-      /dpe\s*a|classe\s*a|energy\s*a|energy rating a/i.test(normalized)
+      /dpe\s*a|classe\s*a|energy.*a/i.test(q)
         ? "A"
-        : /dpe\s*b|classe\s*b|energy\s*b|energy rating b/i.test(normalized)
+        : /dpe\s*b|classe\s*b|energy.*b/i.test(q)
           ? "B"
           : undefined,
     preferredYear:
-      /récent|recente|récente|recent|new|nouveau/i.test(normalized)
+      /récent|récente|recent|recently|new/i.test(q)
         ? 2018
         : undefined,
   };
 }
 
-function calculateScores(
-  property: Property,
+function scoreProperty(
+  property: DemoProperty,
   criteria: SearchCriteria,
 ): ScoredProperty {
   let match = 50;
@@ -481,108 +423,97 @@ function calculateScores(
   if (criteria.budgetMax) {
     if (property.price <= criteria.budgetMax) {
       match += 15;
-      reasons.push("Within your maximum budget");
+      reasons.push("Dans votre budget maximum");
     } else {
-      const over =
-        ((property.price - criteria.budgetMax) / criteria.budgetMax) * 100;
-
-      match -= Math.min(20, Math.max(5, over));
-      compromises.push("Above your stated maximum budget");
+      match -= 15;
+      compromises.push("Au-dessus du budget maximum");
     }
   }
 
   if (criteria.minSurface) {
     if (property.surface >= criteria.minSurface) {
       match += 10;
-      reasons.push("Meets your minimum surface");
+      reasons.push("Respecte la surface minimum");
     } else {
-      const difference = criteria.minSurface - property.surface;
-      match -= Math.min(15, difference / 2);
-      compromises.push(`${difference}m² below your minimum`);
+      match -= 10;
+      compromises.push(
+        `${criteria.minSurface - property.surface} m² sous votre minimum`,
+      );
     }
   }
 
   if (criteria.minBedrooms) {
     if (property.bedrooms >= criteria.minBedrooms) {
       match += 8;
-      reasons.push("Meets your bedroom requirement");
+      reasons.push("Respecte le nombre de chambres demandé");
     } else {
       match -= 10;
-      compromises.push("Below your requested bedroom count");
+      compromises.push("Pas assez de chambres");
     }
   }
 
   if (criteria.garden !== undefined) {
     if (property.garden === criteria.garden) {
       match += 5;
-      reasons.push("Has a garden");
+      reasons.push("Jardin disponible");
     } else {
       match -= 10;
-      compromises.push("No garden");
+      compromises.push("Pas de jardin");
     }
   }
 
   if (criteria.garage !== undefined) {
     if (property.garage === criteria.garage) {
       match += 5;
-      reasons.push("Has a garage");
+      reasons.push("Garage disponible");
     } else {
       match -= 10;
-      compromises.push("No garage");
+      compromises.push("Pas de garage");
     }
   }
 
   if (criteria.location) {
-    const wanted = criteria.location.toLowerCase();
-    const actual = property.location.toLowerCase();
-
-    if (actual.includes(wanted)) {
+    if (
+      property.location
+        .toLowerCase()
+        .includes(criteria.location.toLowerCase())
+    ) {
       match += 7;
-      reasons.push("Located in your requested area");
+      reasons.push("Dans la zone demandée");
     } else {
-      compromises.push("Not in the exact requested location");
-    }
-  }
-
-  if (criteria.preferredEnergy) {
-    if (property.energy <= criteria.preferredEnergy) {
-      value += 7;
-      reasons.push(`Good energy rating (${property.energy})`);
-    } else {
-      compromises.push(`Energy rating ${property.energy}`);
-    }
-  }
-
-  if (criteria.preferredYear) {
-    if (property.year >= criteria.preferredYear) {
-      value += 7;
-      reasons.push("Relatively recent property");
-    } else {
-      compromises.push("Older than your preferred construction period");
+      compromises.push("Pas exactement dans la zone demandée");
     }
   }
 
   if (criteria.budgetMax && property.price < criteria.budgetMax) {
-    const savings = criteria.budgetMax - property.price;
-    const savingsPercent = savings / criteria.budgetMax;
+    const saved = criteria.budgetMax - property.price;
+    value += Math.min(15, (saved / criteria.budgetMax) * 30);
 
-    value += Math.min(15, savingsPercent * 30);
     reasons.push(
-      `Leaves €${Math.round(savings).toLocaleString("fr-FR")} of budget headroom`,
+      `Laisse ${formatPrice(saved)} de marge`,
     );
   }
 
-  if (property.energy === "A") value += 8;
-  else if (property.energy === "B") value += 5;
+  if (property.energy === "A") {
+    value += 8;
+    reasons.push("Excellent DPE");
+  } else if (property.energy === "B") {
+    value += 5;
+    reasons.push("Bon DPE");
+  }
 
-  if (property.year >= 2020) value += 6;
-  else if (property.year >= 2017) value += 3;
+  if (property.year >= 2020) {
+    value += 6;
+    reasons.push("Construction récente");
+  } else if (property.year >= 2017) {
+    value += 3;
+  }
 
   const pricePerM2 = property.price / property.surface;
 
   if (pricePerM2 < 3000) {
     value += 8;
-    reasons.push("Attractive price per m² in this demo dataset");
+    reasons.push("Prix au m² intéressant");
   } else if (pricePerM2 < 3400) {
     value += 4;
   }
@@ -590,62 +521,139 @@ function calculateScores(
   match = Math.round(Math.max(0, Math.min(100, match)));
   value = Math.round(Math.max(0, Math.min(100, value)));
 
-  const overall = Math.round(match * 0.7 + value * 0.3);
+  const orbitScore = Math.round(
+    match * 0.7 + value * 0.3,
+  );
 
   return {
     ...property,
     matchScore: match,
     valueScore: value,
-    orbitScore: overall,
+    orbitScore,
     reasons: reasons.slice(0, 4),
     compromises: compromises.slice(0, 3),
   };
 }
 
-function formatPrice(price: number) {
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(price);
-}
-
 export default function Home() {
   const [query, setQuery] = useState("");
   const [searchedQuery, setSearchedQuery] = useState("");
-  const [criteria, setCriteria] = useState<SearchCriteria | null>(null);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const results = useMemo(() => {
-    if (!criteria || criteria.category !== "real_estate") {
+  const [criteria, setCriteria] =
+    useState<SearchCriteria | null>(null);
+
+  const [webResults, setWebResults] =
+    useState<WebResult[]>([]);
+
+  const [searchingWeb, setSearchingWeb] =
+    useState(false);
+
+  const [searchError, setSearchError] =
+    useState("");
+
+  const [selectedId, setSelectedId] =
+    useState<number | null>(null);
+
+  const [showDemo, setShowDemo] =
+    useState(true);
+
+  const demoResults = useMemo(() => {
+    if (
+      !criteria ||
+      criteria.category !== "real_estate"
+    ) {
       return [];
     }
 
-    return DEMO_PROPERTIES.map((property) =>
-      calculateScores(property, criteria),
-    ).sort((a, b) => b.orbitScore - a.orbitScore);
+    return DEMO_PROPERTIES
+      .map((property) =>
+        scoreProperty(property, criteria),
+      )
+      .sort(
+        (a, b) =>
+          b.orbitScore - a.orbitScore,
+      );
   }, [criteria]);
 
-  const selectedResult =
-    results.find((result) => result.id === selectedId) ?? results[0];
+  const selectedDemo =
+    demoResults.find(
+      (result) => result.id === selectedId,
+    ) ?? demoResults[0];
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     const cleanQuery = query.trim();
 
-    if (!cleanQuery) return;
+    if (!cleanQuery || searchingWeb) {
+      return;
+    }
 
     const parsed = parseCriteria(cleanQuery);
 
     setCriteria(parsed);
     setSearchedQuery(cleanQuery);
     setSelectedId(null);
+    setWebResults([]);
+    setSearchError("");
+    setSearchingWeb(true);
+    setShowDemo(false);
+
+    try {
+      const response = await fetch(
+        "/api/search",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            query: cleanQuery,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (
+        !response.ok ||
+        !data.success
+      ) {
+        throw new Error(
+          data.error ||
+            "Erreur pendant la recherche.",
+        );
+      }
+
+      setWebResults(
+        Array.isArray(data.results)
+          ? data.results
+          : [],
+      );
+    } catch (error) {
+      console.error(
+        "ORBIT web search error:",
+        error,
+      );
+
+      setSearchError(
+        error instanceof Error
+          ? error.message
+          : "La recherche web a échoué.",
+      );
+    } finally {
+      setSearchingWeb(false);
+    }
   };
 
   const resetSearch = () => {
     setQuery("");
     setSearchedQuery("");
     setCriteria(null);
+    setWebResults([]);
+    setSearchError("");
+    setSearchingWeb(false);
     setSelectedId(null);
+    setShowDemo(true);
   };
 
   return (
@@ -661,7 +669,6 @@ export default function Home() {
           <button
             onClick={resetSearch}
             className="flex items-center gap-3"
-            aria-label="Return to ORBIT home"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.05]">
               <div className="h-3 w-3 rounded-full bg-white shadow-[0_0_24px_rgba(255,255,255,0.5)]" />
@@ -671,16 +678,15 @@ export default function Home() {
               <div className="text-sm font-semibold tracking-[0.28em]">
                 ORBIT
               </div>
+
               <div className="text-[10px] uppercase tracking-[0.18em] text-white/25">
                 Decision Intelligence
               </div>
             </div>
           </button>
 
-          <div className="flex items-center gap-3">
-            <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] text-white/35">
-              DEMO MODE
-            </div>
+          <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] text-white/35">
+            LIVE WEB SEARCH
           </div>
         </div>
       </header>
@@ -699,9 +705,9 @@ export default function Home() {
           </h1>
 
           <p className="mx-auto mt-7 max-w-2xl text-base leading-7 text-white/40 sm:text-lg">
-            Describe a house, car, computer, trip or anything you are
-            considering. ORBIT turns your request into structured criteria and
-            finds the strongest available options.
+            Describe a property, car, computer, trip or
+            anything you are considering. ORBIT researches
+            the web and turns the results into useful choices.
           </p>
 
           <div className="mx-auto mt-12 max-w-4xl rounded-[28px] border border-white/10 bg-white/[0.035] p-2 shadow-2xl">
@@ -713,9 +719,15 @@ export default function Home() {
 
                 <input
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) =>
+                    setQuery(
+                      event.target.value,
+                    )
+                  }
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") {
+                    if (
+                      event.key === "Enter"
+                    ) {
                       handleSearch();
                     }
                   }}
@@ -725,10 +737,15 @@ export default function Home() {
 
                 <button
                   onClick={handleSearch}
-                  disabled={!query.trim()}
+                  disabled={
+                    !query.trim() ||
+                    searchingWeb
+                  }
                   className="rounded-2xl bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-30"
                 >
-                  Search
+                  {searchingWeb
+                    ? "Searching..."
+                    : "Search"}
                 </button>
               </div>
             </div>
@@ -738,7 +755,9 @@ export default function Home() {
             {EXAMPLES.map((example) => (
               <button
                 key={example}
-                onClick={() => setQuery(example)}
+                onClick={() =>
+                  setQuery(example)
+                }
                 className="rounded-full border border-white/8 bg-white/[0.025] px-4 py-2 text-xs text-white/35 transition hover:border-white/15 hover:text-white/70"
               >
                 {example}
@@ -747,7 +766,7 @@ export default function Home() {
           </div>
 
           <p className="mt-6 text-xs text-white/20">
-            Demo data only — live web research will be connected later.
+            Live web research is enabled.
           </p>
         </section>
       ) : (
@@ -778,32 +797,36 @@ export default function Home() {
               </div>
 
               <div className="mt-5 space-y-3">
-                {criteria.category !== "unknown" && (
-                  <CriteriaItem
-                    label="Category"
-                    value={
-                      criteria.category === "real_estate"
-                        ? "Real estate"
-                        : criteria.category
-                    }
-                  />
-                )}
+                <CriteriaItem
+                  label="Category"
+                  value={
+                    criteria.category ===
+                    "real_estate"
+                      ? "Real estate"
+                      : criteria.category
+                  }
+                />
 
-                {criteria.budgetMax !== undefined && (
+                {criteria.budgetMax !==
+                  undefined && (
                   <CriteriaItem
                     label="Maximum budget"
-                    value={formatPrice(criteria.budgetMax)}
+                    value={formatPrice(
+                      criteria.budgetMax,
+                    )}
                   />
                 )}
 
-                {criteria.minSurface !== undefined && (
+                {criteria.minSurface !==
+                  undefined && (
                   <CriteriaItem
                     label="Minimum surface"
                     value={`${criteria.minSurface} m²`}
                   />
                 )}
 
-                {criteria.minBedrooms !== undefined && (
+                {criteria.minBedrooms !==
+                  undefined && (
                   <CriteriaItem
                     label="Minimum bedrooms"
                     value={`${criteria.minBedrooms}`}
@@ -833,269 +856,369 @@ export default function Home() {
 
                 {criteria.preferredEnergy && (
                   <CriteriaItem
-                    label="Preferred energy"
-                    value={criteria.preferredEnergy}
+                    label="Preferred DPE"
+                    value={
+                      criteria.preferredEnergy
+                    }
                   />
                 )}
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-amber-300/10 bg-amber-300/[0.03] p-4 text-xs leading-5 text-white/35">
-                <span className="font-medium text-white/60">
-                  Demo mode:
-                </span>{" "}
-                these properties are sample data. No live market source is
-                connected yet.
               </div>
             </aside>
 
             <div>
-              {criteria.category !== "real_estate" ? (
-                <div className="rounded-[28px] border border-white/[0.08] bg-white/[0.025] p-10">
-                  <div className="text-xs uppercase tracking-[0.18em] text-white/25">
-                    Category engine
-                  </div>
+              {searchingWeb && (
+                <div className="mb-5 rounded-[24px] border border-white/[0.08] bg-white/[0.025] p-5">
+                  <div className="flex items-center gap-3">
+                    <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-white" />
 
-                  <h2 className="mt-3 text-2xl font-semibold">
-                    {criteria.category === "unknown"
-                      ? "I need a little more information."
-                      : "This category is coming next."}
-                  </h2>
-
-                  <p className="mt-4 max-w-xl text-sm leading-7 text-white/40">
-                    {criteria.category === "unknown"
-                      ? "Try describing a house, car, electronics product, hotel or another item you want ORBIT to research."
-                      : "The universal architecture is ready, but the current live demo is focused on real estate."}
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex flex-wrap items-end justify-between gap-4">
                     <div>
-                      <div className="text-2xl font-semibold">
-                        {results.length} matches
+                      <div className="text-sm font-medium">
+                        ORBIT is researching
+                        the web
                       </div>
-                      <div className="mt-1 text-sm text-white/30">
-                        Ranked by ORBIT Match + ORBIT Value
-                      </div>
-                    </div>
 
-                    <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] text-white/35">
-                      Demo research
+                      <div className="mt-1 text-xs text-white/30">
+                        Searching live web
+                        sources...
+                      </div>
                     </div>
                   </div>
+                </div>
+              )}
 
-                  <div className="mt-5 grid gap-4 xl:grid-cols-2">
-                    {results.map((result, index) => (
+              {searchError && (
+                <div className="mb-5 rounded-[24px] border border-red-400/10 bg-red-400/[0.04] p-5">
+                  <div className="text-sm font-medium text-red-200/80">
+                    Search error
+                  </div>
+
+                  <div className="mt-2 text-sm text-white/40">
+                    {searchError}
+                  </div>
+                </div>
+              )}
+
+              {criteria.category ===
+                "real_estate" &&
+                showDemo && (
+                  <section className="mb-10">
+                    <div className="mb-5 flex items-end justify-between gap-4">
+                      <div>
+                        <div className="text-xs uppercase tracking-[0.18em] text-white/25">
+                          ORBIT demo engine
+                        </div>
+
+                        <h2 className="mt-2 text-2xl font-semibold">
+                          Example market
+                          analysis
+                        </h2>
+
+                        <p className="mt-1 text-sm text-white/30">
+                          Sample properties used
+                          to test ORBIT ranking.
+                        </p>
+                      </div>
+
                       <button
-                        key={result.id}
-                        onClick={() => setSelectedId(result.id)}
-                        className={`overflow-hidden rounded-[26px] border text-left transition ${
-                          selectedResult?.id === result.id
-                            ? "border-white/20 bg-white/[0.055]"
-                            : "border-white/[0.08] bg-white/[0.025] hover:border-white/[0.14]"
-                        }`}
+                        onClick={() =>
+                          setShowDemo(false)
+                        }
+                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/40 transition hover:bg-white/[0.05]"
                       >
-                        <div className="relative h-56 overflow-hidden">
-                          <img
-                            src={result.image}
-                            alt={result.title}
-                            className="h-full w-full object-cover transition duration-500 hover:scale-105"
+                        Hide demo
+                      </button>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      {demoResults.map(
+                        (
+                          property,
+                          index,
+                        ) => (
+                          <button
+                            key={
+                              property.id
+                            }
+                            onClick={() =>
+                              setSelectedId(
+                                property.id,
+                              )
+                            }
+                            className={`overflow-hidden rounded-[26px] border text-left transition ${
+                              selectedDemo?.id ===
+                              property.id
+                                ? "border-white/20 bg-white/[0.055]"
+                                : "border-white/[0.08] bg-white/[0.025] hover:border-white/[0.14]"
+                            }`}
+                          >
+                            <div className="relative h-52 overflow-hidden">
+                              <img
+                                src={
+                                  property.image
+                                }
+                                alt={
+                                  property.title
+                                }
+                                className="h-full w-full object-cover"
+                              />
+
+                              <div className="absolute left-4 top-4 rounded-full border border-white/10 bg-black/50 px-3 py-1.5 text-[11px] backdrop-blur">
+                                #{index +
+                                  1}
+                              </div>
+
+                              <div className="absolute right-4 top-4 rounded-full border border-white/10 bg-black/50 px-3 py-1.5 text-[11px] backdrop-blur">
+                                ORBIT{" "}
+                                {
+                                  property.orbitScore
+                                }
+                              </div>
+                            </div>
+
+                            <div className="p-5">
+                              <div className="flex items-start justify-between gap-4">
+                                <div>
+                                  <h3 className="text-lg font-medium">
+                                    {
+                                      property.title
+                                    }
+                                  </h3>
+
+                                  <p className="mt-1 text-sm text-white/30">
+                                    {
+                                      property.location
+                                    }
+                                  </p>
+                                </div>
+
+                                <div className="text-right">
+                                  <div className="text-xl font-semibold">
+                                    {formatPrice(
+                                      property.price,
+                                    )}
+                                  </div>
+
+                                  <div className="text-xs text-white/20">
+                                    {Math.round(
+                                      property.price /
+                                        property.surface,
+                                    ).toLocaleString(
+                                      "fr-FR",
+                                    )}{" "}
+                                    €/m²
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="mt-5 flex flex-wrap gap-2">
+                                <Tag>
+                                  {
+                                    property.surface
+                                  }{" "}
+                                  m²
+                                </Tag>
+
+                                <Tag>
+                                  {
+                                    property.bedrooms
+                                  }{" "}
+                                  chambres
+                                </Tag>
+
+                                {property.garden && (
+                                  <Tag>
+                                    Jardin
+                                  </Tag>
+                                )}
+
+                                {property.garage && (
+                                  <Tag>
+                                    Garage
+                                  </Tag>
+                                )}
+
+                                <Tag>
+                                  DPE{" "}
+                                  {
+                                    property.energy
+                                  }
+                                </Tag>
+                              </div>
+
+                              <div className="mt-5 grid grid-cols-2 gap-3">
+                                <ScoreBox
+                                  label="Match"
+                                  score={
+                                    property.matchScore
+                                  }
+                                />
+
+                                <ScoreBox
+                                  label="Value"
+                                  score={
+                                    property.valueScore
+                                  }
+                                />
+                              </div>
+                            </div>
+                          </button>
+                        ),
+                      )}
+                    </div>
+
+                    {selectedDemo && (
+                      <div className="mt-5 rounded-[26px] border border-white/[0.08] bg-white/[0.025] p-6">
+                        <div className="text-xs uppercase tracking-[0.18em] text-white/20">
+                          Demo verdict
+                        </div>
+
+                        <h3 className="mt-3 text-xl font-semibold">
+                          {
+                            selectedDemo.title
+                          }
+                        </h3>
+
+                        <div className="mt-5 grid gap-4 md:grid-cols-3">
+                          <ScoreBox
+                            label="Match"
+                            score={
+                              selectedDemo.matchScore
+                            }
                           />
 
-                          <div className="absolute left-4 top-4 rounded-full border border-white/10 bg-black/50 px-3 py-1.5 text-[11px] backdrop-blur">
-                            #{index + 1}
-                          </div>
+                          <ScoreBox
+                            label="Value"
+                            score={
+                              selectedDemo.valueScore
+                            }
+                          />
 
-                          <div className="absolute right-4 top-4 rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-[11px] backdrop-blur">
-                            ORBIT {result.orbitScore}
-                          </div>
-                        </div>
-
-                        <div className="p-5">
-                          <div className="flex items-start justify-between gap-5">
-                            <div>
-                              <h3 className="text-lg font-medium">
-                                {result.title}
-                              </h3>
-                              <p className="mt-1 text-sm text-white/30">
-                                {result.location}
-                              </p>
-                            </div>
-
-                            <div className="text-right">
-                              <div className="text-xl font-semibold">
-                                {formatPrice(result.price)}
-                              </div>
-                              <div className="mt-1 text-[11px] text-white/25">
-                                {Math.round(
-                                  result.price / result.surface,
-                                ).toLocaleString("fr-FR")}{" "}
-                                €/m²
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-5 flex flex-wrap gap-2">
-                            <Tag>{result.surface} m²</Tag>
-                            <Tag>{result.bedrooms} chambres</Tag>
-                            {result.garden && <Tag>Jardin</Tag>}
-                            {result.garage && <Tag>Garage</Tag>}
-                            <Tag>DPE {result.energy}</Tag>
-                          </div>
-
-                          <div className="mt-5 grid grid-cols-2 gap-3">
-                            <ScoreBox
-                              label="Match"
-                              score={result.matchScore}
-                            />
-                            <ScoreBox
-                              label="Value"
-                              score={result.valueScore}
-                            />
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
-                  {selectedResult && (
-                    <div className="mt-6 rounded-[28px] border border-white/[0.08] bg-white/[0.025] p-6 lg:p-8">
-                      <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-                        <div>
-                          <div className="text-xs uppercase tracking-[0.18em] text-white/25">
-                            ORBIT analysis
-                          </div>
-
-                          <h2 className="mt-3 text-2xl font-semibold">
-                            {selectedResult.title}
-                          </h2>
-
-                          <p className="mt-4 text-sm leading-7 text-white/40">
-                            {selectedResult.description}
-                          </p>
-
-                          <div className="mt-6">
-                            <div className="text-xs uppercase tracking-[0.16em] text-white/20">
-                              Why ORBIT likes it
-                            </div>
-
-                            <div className="mt-3 space-y-2">
-                              {selectedResult.reasons.map((reason) => (
-                                <div
-                                  key={reason}
-                                  className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-white/50"
-                                >
-                                  <span className="mr-2 text-emerald-300/70">
-                                    ✓
-                                  </span>
-                                  {reason}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          {selectedResult.compromises.length > 0 && (
-                            <div className="mt-6">
-                              <div className="text-xs uppercase tracking-[0.16em] text-white/20">
-                                Trade-offs
-                              </div>
-
-                              <div className="mt-3 space-y-2">
-                                {selectedResult.compromises.map((compromise) => (
-                                  <div
-                                    key={compromise}
-                                    className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-white/40"
-                                  >
-                                    <span className="mr-2 text-amber-300/70">
-                                      △
-                                    </span>
-                                    {compromise}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div>
-                          <div className="rounded-3xl border border-white/[0.07] bg-[#0c0e11] p-6">
-                            <div className="text-xs uppercase tracking-[0.18em] text-white/20">
-                              Verdict
-                            </div>
-
-                            <div className="mt-4 text-3xl font-semibold">
-                              {selectedResult.orbitScore >= 85
-                                ? "Strong option"
-                                : selectedResult.orbitScore >= 70
-                                  ? "Worth investigating"
-                                  : "Significant compromises"}
-                            </div>
-
-                            <div className="mt-6 grid grid-cols-3 gap-3">
-                              <MiniScore
-                                label="Match"
-                                value={selectedResult.matchScore}
-                              />
-                              <MiniScore
-                                label="Value"
-                                value={selectedResult.valueScore}
-                              />
-                              <MiniScore
-                                label="Orbit"
-                                value={selectedResult.orbitScore}
-                              />
-                            </div>
-
-                            <div className="mt-6 space-y-3 text-sm text-white/45">
-                              <div className="flex justify-between gap-4">
-                                <span>Price</span>
-                                <span className="text-white/80">
-                                  {formatPrice(selectedResult.price)}
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between gap-4">
-                                <span>Surface</span>
-                                <span className="text-white/80">
-                                  {selectedResult.surface} m²
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between gap-4">
-                                <span>Bedrooms</span>
-                                <span className="text-white/80">
-                                  {selectedResult.bedrooms}
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between gap-4">
-                                <span>Year</span>
-                                <span className="text-white/80">
-                                  {selectedResult.year}
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between gap-4">
-                                <span>Energy</span>
-                                <span className="text-white/80">
-                                  {selectedResult.energy}
-                                </span>
-                              </div>
-
-                              <div className="flex justify-between gap-4">
-                                <span>Distance</span>
-                                <span className="text-white/80">
-                                  {selectedResult.distanceMinutes} min
-                                </span>
-                              </div>
-                            </div>
-                          </div>
+                          <ScoreBox
+                            label="Overall"
+                            score={
+                              selectedDemo.orbitScore
+                            }
+                          />
                         </div>
                       </div>
+                    )}
+                  </section>
+                )}
+
+              <section>
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-white/25">
+                      Live web research
                     </div>
-                  )}
-                </>
-              )}
+
+                    <h2 className="mt-2 text-2xl font-semibold">
+                      {webResults.length}
+                      {" "}
+                      {webResults.length ===
+                      1
+                        ? "source"
+                        : "sources"}{" "}
+                      found
+                    </h2>
+
+                    <p className="mt-1 text-sm text-white/30">
+                      Results retrieved from
+                      the live web.
+                    </p>
+                  </div>
+
+                  <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] text-white/35">
+                    Firecrawl
+                  </div>
+                </div>
+
+                {webResults.length ===
+                0 ? (
+                  <div className="rounded-[26px] border border-white/[0.08] bg-white/[0.025] p-10 text-center">
+                    {searchingWeb ? (
+                      <>
+                        <div className="text-lg font-medium">
+                          Searching...
+                        </div>
+
+                        <p className="mt-2 text-sm text-white/30">
+                          ORBIT is looking
+                          through the web.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-lg font-medium">
+                          No web results
+                          returned.
+                        </div>
+
+                        <p className="mt-2 text-sm text-white/30">
+                          Try a broader
+                          search.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {webResults.map(
+                      (result) => (
+                        <a
+                          key={result.id}
+                          href={
+                            result.url
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group block rounded-[24px] border border-white/[0.08] bg-white/[0.025] p-5 transition hover:border-white/[0.15] hover:bg-white/[0.04]"
+                        >
+                          <div className="flex gap-5">
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.03] text-xs text-white/30">
+                              {
+                                result.position
+                              }
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                <h3 className="text-base font-medium transition group-hover:text-white/90">
+                                  {
+                                    result.title
+                                  }
+                                </h3>
+
+                                <span className="w-fit shrink-0 rounded-full border border-white/8 bg-white/[0.025] px-3 py-1 text-[10px] text-white/30">
+                                  {
+                                    result.source
+                                  }
+                                </span>
+                              </div>
+
+                              <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/35">
+                                {
+                                  result.description
+                                }
+                              </p>
+
+                              <div className="mt-4 truncate text-xs text-white/20">
+                                {
+                                  result.url
+                                }
+                              </div>
+                            </div>
+
+                            <div className="hidden shrink-0 text-white/20 transition group-hover:translate-x-1 group-hover:text-white/50 sm:block">
+                              →
+                            </div>
+                          </div>
+                        </a>
+                      ),
+                    )}
+                  </div>
+                )}
+              </section>
             </div>
           </div>
         </section>
@@ -1113,13 +1236,22 @@ function CriteriaItem({
 }) {
   return (
     <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
-      <div className="text-[11px] text-white/25">{label}</div>
-      <div className="mt-1 font-medium">{value}</div>
+      <div className="text-[11px] text-white/25">
+        {label}
+      </div>
+
+      <div className="mt-1 font-medium">
+        {value}
+      </div>
     </div>
   );
 }
 
-function Tag({ children }: { children: React.ReactNode }) {
+function Tag({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <span className="rounded-full bg-white/[0.04] px-3 py-1.5 text-xs text-white/50">
       {children}
@@ -1139,24 +1271,10 @@ function ScoreBox({
       <div className="text-[10px] uppercase tracking-[0.14em] text-white/20">
         {label}
       </div>
-      <div className="mt-1 text-lg font-semibold">{score}</div>
-    </div>
-  );
-}
 
-function MiniScore({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3">
-      <div className="text-[10px] uppercase tracking-[0.12em] text-white/20">
-        {label}
+      <div className="mt-1 text-lg font-semibold">
+        {score}
       </div>
-      <div className="mt-1 text-xl font-semibold">{value}</div>
     </div>
   );
 }

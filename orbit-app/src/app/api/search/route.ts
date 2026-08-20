@@ -13,6 +13,7 @@ type FirecrawlResponse = {
     web?: FirecrawlSearchResult[];
   };
   error?: string;
+  creditsUsed?: number;
 };
 
 export async function POST(request: NextRequest) {
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "A search query is required.",
+          error: "La recherche est vide.",
         },
         { status: 400 },
       );
@@ -35,10 +36,12 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.FIRECRAWL_API_KEY;
 
     if (!apiKey) {
+      console.error("FIRECRAWL_API_KEY is missing.");
+
       return NextResponse.json(
         {
           success: false,
-          error: "FIRECRAWL_API_KEY is missing.",
+          error: "La clé Firecrawl n'est pas configurée.",
         },
         { status: 500 },
       );
@@ -64,33 +67,39 @@ export async function POST(request: NextRequest) {
     const payload = (await response.json()) as FirecrawlResponse;
 
     if (!response.ok || !payload.success) {
-      console.error("Firecrawl error:", payload);
+      console.error("Firecrawl response error:", payload);
 
       return NextResponse.json(
         {
           success: false,
           error:
             payload.error ||
-            "Firecrawl returned an error.",
+            "Le moteur de recherche web a retourné une erreur.",
         },
         { status: response.status || 502 },
       );
     }
 
-    const results = (payload.data?.web ?? []).map(
-      (result, index) => ({
+    const webResults = payload.data?.web ?? [];
+
+    const results = webResults
+      .filter((item) => item.url)
+      .map((item, index) => ({
         id: `${Date.now()}-${index}`,
-        title: result.title ?? "Untitled result",
-        description: result.description ?? "",
-        url: result.url ?? "",
-        position: result.position ?? index + 1,
-      }),
-    );
+        title: item.title?.trim() || "Résultat sans titre",
+        description:
+          item.description?.trim() ||
+          "Aucune description disponible.",
+        url: item.url!,
+        position: item.position ?? index + 1,
+        source: getDomain(item.url!),
+      }));
 
     return NextResponse.json({
       success: true,
       query,
       count: results.length,
+      creditsUsed: payload.creditsUsed ?? null,
       results,
     });
   } catch (error) {
@@ -99,9 +108,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: "Unable to perform web search.",
+        error: "Impossible d'effectuer la recherche.",
       },
       { status: 500 },
     );
+  }
+}
+
+function getDomain(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "web";
   }
 }
