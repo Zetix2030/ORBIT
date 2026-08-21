@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "search:up": "docker compose -f docker-compose.searxng.yml up -d",
+    "search:down": "docker compose -f docker-compose.searxng.yml down"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
