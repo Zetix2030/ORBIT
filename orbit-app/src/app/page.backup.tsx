@@ -819,18 +819,15 @@ export default function Home() {
   }
 
   async function handleSignOut() {
-    try {
-      await supabase.auth.signOut();
-    } finally {
-      setAuthUser(null);
-      setShowMarketingLanding(true);
-      setAuthMode(null);
-      setShowAssistant(false);
-      setShowCommand(false);
-      setSelectedListingId(null);
-      setActiveNav("search");
-      window.history.replaceState({}, "", "/");
-    }
+    await supabase.auth.signOut();
+
+    setAuthUser(null);
+    setShowMarketingLanding(
+      true,
+    );
+    setAuthMode(null);
+    setShowAssistant(false);
+    setActiveNav("search");
   }
 
   function resetSearch() {
@@ -1046,9 +1043,6 @@ export default function Home() {
             "assistant",
           );
         }}
-        onSettings={() =>
-          window.location.assign("/settings")
-        }
         onSignOut={() =>
           void handleSignOut()
         }
@@ -1065,9 +1059,6 @@ export default function Home() {
           }
           onAssistant={() =>
             setShowAssistant(true)
-          }
-          onSettings={() =>
-            window.location.assign("/settings")
           }
           onSignOut={() =>
             void handleSignOut()
@@ -2269,7 +2260,6 @@ function Sidebar({
   onNavigate,
   onNewSearch,
   onAssistant,
-  onSettings,
   onSignOut,
 }: {
   active:
@@ -2289,7 +2279,6 @@ function Sidebar({
   ) => void;
   onNewSearch: () => void;
   onAssistant: () => void;
-  onSettings: () => void;
   onSignOut: () => void;
 }) {
   return (
@@ -2377,23 +2366,13 @@ function Sidebar({
         </div>
 
         {user && (
-          <>
-            <button
-              onClick={onSettings}
-              title="Paramètres"
-              className="flex h-8 w-8 items-center justify-center rounded-xl border border-transparent text-[12px] text-white/20 transition hover:border-white/[0.06] hover:bg-white/[0.035] hover:text-white/55"
-            >
-              ⚙
-            </button>
-
-            <button
-              onClick={onSignOut}
-              title="Se déconnecter"
-              className="flex h-8 w-8 items-center justify-center rounded-xl border border-transparent text-[12px] text-white/20 transition hover:border-white/[0.06] hover:bg-white/[0.035] hover:text-white/55"
-            >
-              ↪
-            </button>
-          </>
+          <button
+            onClick={onSignOut}
+            title="Se déconnecter"
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-transparent text-[12px] text-white/20 transition hover:border-white/[0.06] hover:bg-white/[0.035] hover:text-white/55"
+          >
+            ↪
+          </button>
         )}
       </div>
     </aside>
@@ -2443,7 +2422,6 @@ function TopBar({
   user,
   onCommand,
   onAssistant,
-  onSettings,
   onSignOut,
 }: {
   creditsUsed:
@@ -2452,7 +2430,6 @@ function TopBar({
   user: User | null;
   onCommand: () => void;
   onAssistant: () => void;
-  onSettings: () => void;
   onSignOut: () => void;
 }) {
   return (
@@ -2543,19 +2520,10 @@ function TopBar({
                 <div className="my-1 h-px bg-white/[0.05]" />
 
                 <button
-                  onClick={onSettings}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[10px] text-white/35 transition hover:bg-white/[0.04] hover:text-white/70"
-                >
-                  <span>⚙</span>
-                  <span>Paramètres</span>
-                </button>
-
-                <button
                   onClick={onSignOut}
-                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[10px] text-white/35 transition hover:bg-red-400/[0.05] hover:text-red-200/80"
+                  className="w-full rounded-xl px-3 py-2.5 text-left text-[10px] text-white/35 transition hover:bg-white/[0.04] hover:text-white/70"
                 >
-                  <span>↪</span>
-                  <span>Se déconnecter</span>
+                  Se déconnecter
                 </button>
               </div>
             </div>
@@ -3503,9 +3471,12 @@ function SourcesPanel({
         <div className="mt-4 space-y-2">
           {sources
             .slice(0, 10)
-            .map((source, index) => (
+            .map(
+              (source) => (
                 <a
-                  key={`${source.id ?? "source"}-${index}-${source.url ?? source.title ?? ""}`}
+                  key={
+                    source.id
+                  }
                   href={
                     source.url
                   }

@@ -864,52 +864,16 @@ export async function POST(request: NextRequest) {
        page scraping.
     ----------------------------------------------------- */
 
-    /*
-     * ORBIT FLEXIBLE SNIPPET DISCOVERY
-     *
-     * Les moteurs de recherche donnent souvent de vraies annonces
-     * via des URL que nos heuristiques ne reconnaissent pas encore.
-     *
-     * On conserve donc les résultats immobiliers plausibles,
-     * même lorsque looksLikeIndividualListing() n'est pas certain.
-     */
     const directSnippetSources =
       rankedSources
-        .filter((source) => {
-          const text =
-            `${source.title ?? ""} ${source.description ?? ""} ${source.url ?? ""}`
-              .toLowerCase();
-
-          const propertySignal =
-            /\b(maison|maisons|house|houses|villa|villas|home|homes|propriete|property|immobilier|real estate|vente|sale)\b/i.test(
-              text,
-            );
-
-          const city =
-            String(
-              criteria.city ??
-              "",
-            )
-              .toLowerCase()
-              .trim();
-
-          /*
-           * La ville augmente la pertinence mais son absence
-           * dans le snippet ne supprime pas le résultat.
-           */
-          const citySignal =
-            !city ||
-            text.includes(city);
-
-          return (
-            propertySignal &&
-            (
-              citySignal ||
-              source.sourceScore > 0
-            )
-          );
-        })
-        .slice(0, 40);
+        .filter((source) =>
+          looksLikeIndividualListing(
+            source.url,
+            source.url,
+            true,
+          ),
+        )
+        .slice(0, 24);
 
     const snippetListings =
       directSnippetSources
@@ -976,13 +940,7 @@ export async function POST(request: NextRequest) {
             b.discoveryScore -
             a.discoveryScore,
         )
-        .slice(
-          0,
-          Math.max(
-            TARGET_LISTINGS * 2,
-            20,
-          ),
-        );
+        .slice(0, 10);
 
     const enrichmentJobs =
       await Promise.allSettled(
@@ -1087,48 +1045,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    /*
-     * ORBIT FLEXIBLE LISTING POOL
-     *
-     * Les annonces enrichies passent toujours isUsableListing().
-     *
-     * Les snippets issus du moteur de recherche peuvent cependant
-     * manquer de prix, surface, photo ou autres métadonnées.
-     * Ils restent donc dans le pool afin que le scoring les classe
-     * au lieu de les supprimer.
-     */
     const uniqueListings =
       Array.from(
         listingsByUrl.values(),
       )
-        .filter((listing) => {
-          const isSnippet =
-            String(
-              listing.id ??
-              "",
-            ).startsWith(
-              "snippet-",
-            );
-
-          return (
-            isSnippet ||
-            isUsableListing(
-              listing,
-              criteria,
-            )
-          );
-        })
-        .sort(
-          (a, b) =>
-            b.orbitScore -
-            a.orbitScore,
+        .filter((listing) =>
+          isUsableListing(
+            listing,
+            criteria,
+          ),
         )
         .slice(
           0,
-          Math.max(
-            TARGET_LISTINGS * 4,
-            40,
-          ),
+          TARGET_LISTINGS * 3,
         );
 
     /* -----------------------------------------------------
@@ -1177,84 +1106,19 @@ export async function POST(request: NextRequest) {
         criteria,
       );
 
-    const strictlyVerifiedListings =
-      comparisonPoolRecovered.filter(
-        (listing) =>
-          isFinalVerifiedListing(
-            listing,
-            criteria,
-          ),
-      );
-
-    /*
-     * ORBIT RESCUE FINAL POOL
-     *
-     * Strictly verified results stay first.
-     *
-     * If strict verification gives fewer than TARGET_LISTINGS,
-     * ORBIT fills the remaining positions with the strongest
-     * recovered/snippet candidates instead of returning 0.
-     *
-     * This makes unknown metadata a scoring issue rather than
-     * an automatic deletion.
-     */
-    const rescueSeenUrls =
-      new Set(
-        strictlyVerifiedListings.map(
-          (listing) =>
-            normalizeUrl(listing.url),
-        ),
-      );
-
-    const rescueListings =
-      comparisonPoolRecovered
-        .filter((listing) => {
-          const key =
-            normalizeUrl(listing.url);
-
-          if (!key) {
-            return false;
-          }
-
-          if (rescueSeenUrls.has(key)) {
-            return false;
-          }
-
-          rescueSeenUrls.add(key);
-
-          return true;
-        })
-        .sort((a, b) =>
-          sortListings(
-            a,
-            b,
-            criteria.sortPriority,
-          ),
-        );
-
     const verifiedListings =
-      [
-        ...strictlyVerifiedListings,
-        ...rescueListings,
-      ]
-        .slice(
-          0,
-          Math.max(
-            TARGET_LISTINGS * 2,
-            20,
-          ),
+      comparisonPoolRecovered
+        .filter(
+          (listing) =>
+            isFinalVerifiedListing(
+              listing,
+              criteria,
+            ),
         );
-
-    const finalListingPool =
-      verifiedListings.length > 0
-        ? verifiedListings
-        : comparisonPoolRecovered.length > 0
-          ? comparisonPoolRecovered
-          : uniqueListings;
 
     const comparedListings =
       applyRelativeComparison(
-        finalListingPool,
+        verifiedListings,
         criteria,
       )
         .sort((a, b) =>
@@ -3738,17 +3602,20 @@ function extractListingFromSearchSnippet(
     );
 
   /*
-   * ORBIT FLEXIBLE SNIPPET FALLBACK
-   *
-   * Une URL imparfaite ne suffit plus à supprimer un résultat.
-   * Le score + les critères immobiliers décideront ensuite
-   * de son classement.
-   *
-   * Cela évite :
-   * 40 candidats -> 0 résultats
-   * lorsque SeLoger, Ouest-France, Properstar, etc.
-   * utilisent des structures d'URL différentes.
+   * Keep only individual-listing URLs. Search snippets are allowed
+   * to be incomplete; missing fields are better than losing the
+   * result entirely.
    */
+  if (
+    !looksLikeIndividualListing(
+      source.url,
+      source.url,
+      true,
+    )
+  ) {
+    return null;
+  }
+
   return {
     id:
       `snippet-${index}`,

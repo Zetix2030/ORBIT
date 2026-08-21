@@ -3503,9 +3503,12 @@ function SourcesPanel({
         <div className="mt-4 space-y-2">
           {sources
             .slice(0, 10)
-            .map((source, index) => (
+            .map(
+              (source) => (
                 <a
-                  key={`${source.id ?? "source"}-${index}-${source.url ?? source.title ?? ""}`}
+                  key={
+                    source.id
+                  }
                   href={
                     source.url
                   }

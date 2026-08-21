@@ -864,52 +864,16 @@ export async function POST(request: NextRequest) {
        page scraping.
     ----------------------------------------------------- */
 
-    /*
-     * ORBIT FLEXIBLE SNIPPET DISCOVERY
-     *
-     * Les moteurs de recherche donnent souvent de vraies annonces
-     * via des URL que nos heuristiques ne reconnaissent pas encore.
-     *
-     * On conserve donc les résultats immobiliers plausibles,
-     * même lorsque looksLikeIndividualListing() n'est pas certain.
-     */
     const directSnippetSources =
       rankedSources
-        .filter((source) => {
-          const text =
-            `${source.title ?? ""} ${source.description ?? ""} ${source.url ?? ""}`
-              .toLowerCase();
-
-          const propertySignal =
-            /\b(maison|maisons|house|houses|villa|villas|home|homes|propriete|property|immobilier|real estate|vente|sale)\b/i.test(
-              text,
-            );
-
-          const city =
-            String(
-              criteria.city ??
-              "",
-            )
-              .toLowerCase()
-              .trim();
-
-          /*
-           * La ville augmente la pertinence mais son absence
-           * dans le snippet ne supprime pas le résultat.
-           */
-          const citySignal =
-            !city ||
-            text.includes(city);
-
-          return (
-            propertySignal &&
-            (
-              citySignal ||
-              source.sourceScore > 0
-            )
-          );
-        })
-        .slice(0, 40);
+        .filter((source) =>
+          looksLikeIndividualListing(
+            source.url,
+            source.url,
+            true,
+          ),
+        )
+        .slice(0, 24);
 
     const snippetListings =
       directSnippetSources
@@ -976,13 +940,7 @@ export async function POST(request: NextRequest) {
             b.discoveryScore -
             a.discoveryScore,
         )
-        .slice(
-          0,
-          Math.max(
-            TARGET_LISTINGS * 2,
-            20,
-          ),
-        );
+        .slice(0, 10);
 
     const enrichmentJobs =
       await Promise.allSettled(
@@ -1087,48 +1045,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    /*
-     * ORBIT FLEXIBLE LISTING POOL
-     *
-     * Les annonces enrichies passent toujours isUsableListing().
-     *
-     * Les snippets issus du moteur de recherche peuvent cependant
-     * manquer de prix, surface, photo ou autres métadonnées.
-     * Ils restent donc dans le pool afin que le scoring les classe
-     * au lieu de les supprimer.
-     */
     const uniqueListings =
       Array.from(
         listingsByUrl.values(),
       )
-        .filter((listing) => {
-          const isSnippet =
-            String(
-              listing.id ??
-              "",
-            ).startsWith(
-              "snippet-",
-            );
-
-          return (
-            isSnippet ||
-            isUsableListing(
-              listing,
-              criteria,
-            )
-          );
-        })
-        .sort(
-          (a, b) =>
-            b.orbitScore -
-            a.orbitScore,
+        .filter((listing) =>
+          isUsableListing(
+            listing,
+            criteria,
+          ),
         )
         .slice(
           0,
-          Math.max(
-            TARGET_LISTINGS * 4,
-            40,
-          ),
+          TARGET_LISTINGS * 3,
         );
 
     /* -----------------------------------------------------
@@ -1177,84 +1106,19 @@ export async function POST(request: NextRequest) {
         criteria,
       );
 
-    const strictlyVerifiedListings =
-      comparisonPoolRecovered.filter(
-        (listing) =>
-          isFinalVerifiedListing(
-            listing,
-            criteria,
-          ),
-      );
-
-    /*
-     * ORBIT RESCUE FINAL POOL
-     *
-     * Strictly verified results stay first.
-     *
-     * If strict verification gives fewer than TARGET_LISTINGS,
-     * ORBIT fills the remaining positions with the strongest
-     * recovered/snippet candidates instead of returning 0.
-     *
-     * This makes unknown metadata a scoring issue rather than
-     * an automatic deletion.
-     */
-    const rescueSeenUrls =
-      new Set(
-        strictlyVerifiedListings.map(
-          (listing) =>
-            normalizeUrl(listing.url),
-        ),
-      );
-
-    const rescueListings =
-      comparisonPoolRecovered
-        .filter((listing) => {
-          const key =
-            normalizeUrl(listing.url);
-
-          if (!key) {
-            return false;
-          }
-
-          if (rescueSeenUrls.has(key)) {
-            return false;
-          }
-
-          rescueSeenUrls.add(key);
-
-          return true;
-        })
-        .sort((a, b) =>
-          sortListings(
-            a,
-            b,
-            criteria.sortPriority,
-          ),
-        );
-
     const verifiedListings =
-      [
-        ...strictlyVerifiedListings,
-        ...rescueListings,
-      ]
-        .slice(
-          0,
-          Math.max(
-            TARGET_LISTINGS * 2,
-            20,
-          ),
+      comparisonPoolRecovered
+        .filter(
+          (listing) =>
+            isFinalVerifiedListing(
+              listing,
+              criteria,
+            ),
         );
-
-    const finalListingPool =
-      verifiedListings.length > 0
-        ? verifiedListings
-        : comparisonPoolRecovered.length > 0
-          ? comparisonPoolRecovered
-          : uniqueListings;
 
     const comparedListings =
       applyRelativeComparison(
-        finalListingPool,
+        verifiedListings,
         criteria,
       )
         .sort((a, b) =>
@@ -3738,17 +3602,20 @@ function extractListingFromSearchSnippet(
     );
 
   /*
-   * ORBIT FLEXIBLE SNIPPET FALLBACK
-   *
-   * Une URL imparfaite ne suffit plus à supprimer un résultat.
-   * Le score + les critères immobiliers décideront ensuite
-   * de son classement.
-   *
-   * Cela évite :
-   * 40 candidats -> 0 résultats
-   * lorsque SeLoger, Ouest-France, Properstar, etc.
-   * utilisent des structures d'URL différentes.
+   * Keep only individual-listing URLs. Search snippets are allowed
+   * to be incomplete; missing fields are better than losing the
+   * result entirely.
    */
+  if (
+    !looksLikeIndividualListing(
+      source.url,
+      source.url,
+      true,
+    )
+  ) {
+    return null;
+  }
+
   return {
     id:
       `snippet-${index}`,
@@ -7097,156 +6964,162 @@ function applyRelativeComparison(
 function isFinalVerifiedListing(
   listing: StructuredListing,
   criteria: SearchIntent,
-) 
-{
+) {
   /*
-   * ORBIT FINAL FILTER — FLEXIBLE
-   *
-   * IMPORTANT :
-   * Ce filtre ne doit plus supprimer une annonce pour :
-   * - surface légèrement trop petite
-   * - surface inconnue
-   * - prix inconnu
-   * - budget légèrement dépassé
-   * - chambres manquantes
-   * - ville mal renseignée
-   *
-   * Ces informations doivent influencer le SCORE,
-   * pas faire disparaître l'annonce.
+   * FINAL RULE 1 — it must be a real individual listing page.
    */
-
-  const item = listing as unknown as Record<string, unknown>;
-  const wanted = criteria as unknown as Record<string, unknown>;
-
-  const normalize = (value: unknown) =>
-    String(value ?? "")
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .trim();
-
-  const title = normalize(item.title);
-
-  const url = String(
-    item.url ??
-    item.sourceUrl ??
-    item.sourceURL ??
-    "",
-  );
-
-  const locationText = normalize([
-    item.location,
-    item.city,
-    item.country,
-    item.address,
-    item.title,
-  ].filter(Boolean).join(" "));
-
-  const typeText = normalize([
-    item.propertyType,
-    item.type,
-    item.title,
-  ].filter(Boolean).join(" "));
-
-  /*
-   * 1 — Une annonce doit au minimum avoir une URL
-   *     ou un titre exploitable.
-   */
-  if (!url && !title) {
-    return false;
-  }
-
-  /*
-   * 2 — Éviter les pages clairement génériques.
-   *     MAIS rester volontairement permissif.
-   */
-  const genericSignals = [
-    "search",
-    "recherche",
-    "properties for sale",
-    "property for sale",
-    "homes for sale",
-    "maisons a vendre",
-    "immobilier a vendre",
-  ];
-
-  const looksGeneric =
-    genericSignals.some((signal) =>
-      title === signal ||
-      title.length < 5
-    );
-
-  if (looksGeneric && !url) {
-    return false;
-  }
-
-  /*
-   * 3 — Si l'utilisateur demande explicitement une maison,
-   *     on rejette seulement les annonces explicitement
-   *     identifiées comme appartement/studio.
-   */
-  const wantedType = normalize(
-    wanted.propertyType ??
-    wanted.type
-  );
-
-  const wantsHouse =
-    wantedType.includes("house") ||
-    wantedType.includes("maison") ||
-    wantedType.includes("villa");
-
-  if (wantsHouse) {
-    const explicitApartment =
-      /\b(apartment|appartement|flat|studio|condo)\b/.test(
-        typeText,
-      );
-
-    const explicitHouse =
-      /\b(house|maison|villa|home|townhouse|terraced|detached)\b/.test(
-        typeText,
-      );
-
-    if (explicitApartment && !explicitHouse) {
-      return false;
-    }
-  }
-
-  /*
-   * 4 — Mauvais pays EXPLICITE seulement.
-   *
-   * Une localisation inconnue n'est PAS rejetée.
-   */
-  const wantedCountry = normalize(
-    wanted.country
-  );
-
-  const listingCountry = normalize(
-    item.country
-  );
-
   if (
-    wantedCountry &&
-    listingCountry &&
-    wantedCountry !== listingCountry &&
-    !locationText.includes(wantedCountry)
+    !isStrongIndividualListingUrl(
+      listing.url,
+    ) ||
+    looksLikeCategorySearchResult(
+      listing.title,
+      listing.description,
+      listing.url,
+    )
   ) {
     return false;
   }
 
   /*
-   * AUCUN rejet dur pour :
-   *
-   * - minSurface
-   * - maxPrice
-   * - minBedrooms
-   * - ville
-   * - données manquantes
-   *
-   * calculateBaseScores() doit gérer leur classement.
+   * FINAL RULE 2 — reject explicit foreign-country results.
    */
-  return true;
-}
+  if (
+    !isCountryCompatible(
+      listing,
+      criteria,
+    )
+  ) {
+    return false;
+  }
 
+  
+  /*
+   * ORBIT FLEXIBLE SEARCH MODE
+   *
+   * balanced = comportement normal :
+   * les critères servent au classement mais ne suppriment
+   * plus automatiquement une annonce.
+   *
+   * broad = encore plus permissif.
+   *
+   * strict = ancien comportement avec contraintes dures.
+   */
+  const __orbitSearchMode =
+    String(
+      (criteria as unknown as {
+        searchMode?: string;
+      }).searchMode ?? "balanced",
+    ).toLowerCase();
+
+  if (__orbitSearchMode === "strict") {
+/*
+   * FINAL RULE 3 — requested city must be present when the listing
+   * explicitly exposes another place/country.
+   */
+  if (
+    !isCityCompatible(
+      listing,
+      criteria,
+    )
+  ) {
+    return false;
+  }
+
+  /*
+   * FINAL RULE 4 — hard property type.
+   */
+  if (
+    !isPropertyTypeCompatible(
+      listing,
+      criteria,
+    )
+  ) {
+    return false;
+  }
+
+  /*
+   * FINAL RULE 5 — if the user asked for minimum bedrooms,
+   * ORBIT only shows listings where the bedroom count is known.
+   */
+  if (
+    criteria.minBedrooms
+  ) {
+    if (
+      listing.bedrooms ===
+        undefined ||
+      listing.bedrooms <
+        criteria.minBedrooms
+    ) {
+      return false;
+    }
+  }
+
+  /*
+   * FINAL RULE 6 — same principle for minimum surface.
+   */
+  if (
+    criteria.minSurface
+  ) {
+    if (
+      listing.surface ===
+        undefined ||
+      listing.surface <
+        criteria.minSurface
+    ) {
+      return false;
+    }
+  }
+
+  /*
+   * FINAL RULE 7 — with a maximum budget, price must be confirmed.
+   * This removes "Prix non confirmé" cards from budget searches.
+   */
+  if (
+    criteria.budgetMax
+  ) {
+    if (
+      listing.price ===
+        undefined ||
+      listing.price >
+        criteria.budgetMax
+    ) {
+      return false;
+    }
+  }
+
+  /*
+   * FINAL RULE 8 — if location exists, reuse normal geo rejection.
+   */
+  if (
+    criteria.city
+  ) {
+    const geo =
+      evaluateListingLocation(
+        listing.location,
+        listing.title,
+        listing.description,
+        criteria,
+      );
+
+    if (geo.reject) {
+      return false;
+    }
+  }
+
+  
+  }
+
+  /*
+   * En balanced/broad :
+   * les RULES 3 → 8 deviennent des préférences de scoring.
+   * RULE 1 et RULE 2 restent actives :
+   * - vraie annonce individuelle
+   * - pas de pays explicitement incorrect
+   */
+
+return true;
+}
 
 function isCountryCompatible(
   listing: StructuredListing,

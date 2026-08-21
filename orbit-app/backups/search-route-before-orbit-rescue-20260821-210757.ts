@@ -1177,84 +1177,19 @@ export async function POST(request: NextRequest) {
         criteria,
       );
 
-    const strictlyVerifiedListings =
-      comparisonPoolRecovered.filter(
-        (listing) =>
-          isFinalVerifiedListing(
-            listing,
-            criteria,
-          ),
-      );
-
-    /*
-     * ORBIT RESCUE FINAL POOL
-     *
-     * Strictly verified results stay first.
-     *
-     * If strict verification gives fewer than TARGET_LISTINGS,
-     * ORBIT fills the remaining positions with the strongest
-     * recovered/snippet candidates instead of returning 0.
-     *
-     * This makes unknown metadata a scoring issue rather than
-     * an automatic deletion.
-     */
-    const rescueSeenUrls =
-      new Set(
-        strictlyVerifiedListings.map(
-          (listing) =>
-            normalizeUrl(listing.url),
-        ),
-      );
-
-    const rescueListings =
-      comparisonPoolRecovered
-        .filter((listing) => {
-          const key =
-            normalizeUrl(listing.url);
-
-          if (!key) {
-            return false;
-          }
-
-          if (rescueSeenUrls.has(key)) {
-            return false;
-          }
-
-          rescueSeenUrls.add(key);
-
-          return true;
-        })
-        .sort((a, b) =>
-          sortListings(
-            a,
-            b,
-            criteria.sortPriority,
-          ),
-        );
-
     const verifiedListings =
-      [
-        ...strictlyVerifiedListings,
-        ...rescueListings,
-      ]
-        .slice(
-          0,
-          Math.max(
-            TARGET_LISTINGS * 2,
-            20,
-          ),
+      comparisonPoolRecovered
+        .filter(
+          (listing) =>
+            isFinalVerifiedListing(
+              listing,
+              criteria,
+            ),
         );
-
-    const finalListingPool =
-      verifiedListings.length > 0
-        ? verifiedListings
-        : comparisonPoolRecovered.length > 0
-          ? comparisonPoolRecovered
-          : uniqueListings;
 
     const comparedListings =
       applyRelativeComparison(
-        finalListingPool,
+        verifiedListings,
         criteria,
       )
         .sort((a, b) =>
