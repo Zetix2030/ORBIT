@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 
-type FirecrawlResult = {
+import { detectLocationWithAI } from "@/lib/search/location";
+import { parsePriceFromText, sanitizePropertyPrice } from "@/lib/search/price";
+
+type SearXNGResult = {
   url?: string;
   title?: string;
-  description?: string;
-  position?: number;
-  image?: string;
+  content?: string;
+  score?: number;
+  engine?: string;
+  engines?: string[];
+  thumbnail?: string;
+  img_src?: string;
 };
 
-type FirecrawlResponse = {
-  success?: boolean;
-  data?: { web?: FirecrawlResult[] };
-  error?: string;
-  creditsUsed?: number;
+type SearXNGResponse = {
+  query?: string;
+  results?: SearXNGResult[];
 };
 
 type Criteria = {
@@ -61,170 +65,252 @@ type Listing = {
   reasons: string[];
   compromises: string[];
   extractedAt: string;
+  priceConfidence?: "confirmed" | "snippet" | "none";
 };
 
 const TARGET = 10;
 
-function clean(s: unknown) {
-  return String(s ?? "").replace(/\s+/g, " ").trim();
+const COUNTRY_DOMAINS: Record<string, string[]> = {
+  France: ["seloger.com", "bienici.com", "ouestfrance-immo.com", "leboncoin.fr", "orpi.com", "century21.fr"],
+  "United States": ["zillow.com", "redfin.com", "realtor.com", "homes.com", "compass.com"],
+  "United Kingdom": ["rightmove.co.uk", "zoopla.co.uk", "onthemarket.com", "primelocation.com"],
+  Canada: ["realtor.ca", "centris.ca", "royallepage.ca"],
+  Germany: ["immobilienscout24.de", "immowelt.de", "immonet.de"],
+  Spain: ["idealista.com", "fotocasa.es", "habitaclia.com"],
+  Portugal: ["idealista.pt", "imovirtual.com", "casa.sapo.pt"],
+  Italy: ["immobiliare.it", "idealista.it", "casa.it"],
+  Belgium: ["immoweb.be", "zimmo.be"],
+  Netherlands: ["funda.nl", "pararius.nl"],
+  Switzerland: ["homegate.ch", "immoscout24.ch", "newhome.ch"],
+  Austria: ["willhaben.at", "immobilienscout24.at"],
+  Australia: ["realestate.com.au", "domain.com.au"],
+  "New Zealand": ["trademe.co.nz", "realestate.co.nz"],
+  Ireland: ["daft.ie", "myhome.ie"],
+  "United Arab Emirates": ["propertyfinder.ae", "bayut.com", "dubizzle.com"],
+  India: ["99acres.com", "magicbricks.com", "housing.com"],
+  Singapore: ["propertyguru.com.sg", "99.co"],
+};
+
+const COUNTRY_TERMS: Record<string, string> = {
+  France: "maison à vendre immobilier",
+  "United States": "house for sale real estate",
+  "United Kingdom": "house for sale property",
+  Canada: "house for sale real estate",
+  Germany: "haus kaufen immobilien",
+  Spain: "casa en venta inmobiliaria",
+  Portugal: "casa à venda imobiliário",
+  Italy: "casa in vendita immobiliare",
+  Belgium: "maison à vendre immobilier",
+  Netherlands: "huis te koop woning",
+  Switzerland: "haus kaufen immobilien",
+  Austria: "haus kaufen immobilien",
+  Australia: "house for sale property",
+  "New Zealand": "house for sale property",
+  Ireland: "house for sale property",
+  "United Arab Emirates": "villa house for sale property",
+  India: "house villa for sale property",
+  Singapore: "house landed property for sale",
+};
+
+function clean(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function norm(s: unknown) {
-  return clean(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+function norm(value: unknown) {
+  return clean(value).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 function host(url: string) {
-  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "web"; }
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "web";
+  }
 }
 
-function parseLooseNumber(raw: string | undefined) {
+function parseSimpleNumber(raw: string | undefined) {
   if (!raw) return undefined;
-  const s = raw.replace(/[\s\u00a0]/g, "").replace(/,/g, ".");
-  const n = Number(s.replace(/[^\d.]/g, ""));
+  const n = Number(raw.replace(/[\s\u00a0]/g, "").replace(",", ".").replace(/[^\d.]/g, ""));
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
-function parseCriteria(query: string): Criteria {
+async function parseCriteria(query: string): Promise<Criteria> {
   const q = norm(query);
-  const surface = q.match(/(\d{2,4})\s*(?:m2|m²|metres? carres?|sqm)/i);
-  const bedrooms = q.match(/(\d{1,2})\s*(?:chambres?|bedrooms?|beds?)/i);
-  const budget = q.match(/(?:moins de|sous|budget(?: max)?|max(?:imum)?|under|below|up to)\s*([\d\s.,]+)\s*(?:€|eur|euros?)?/i)
-    ?? q.match(/([\d\s.,]{4,})\s*(?:€|eur|euros?)/i);
+  const location = await detectLocationWithAI(query, process.env.OPENAI_API_KEY);
 
-  let city: string | undefined;
-  const known = ["brest", "paris", "lyon", "marseille", "rennes", "nantes", "bordeaux", "lille", "toulouse", "nice", "londres", "london", "miami", "new york", "washington"];
-  city = known.find(c => q.includes(norm(c)));
-  if (city === "londres") city = "London";
-  else if (city) city = city.replace(/\b\w/g, m => m.toUpperCase());
+  const surfaceMatch = q.match(/(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|metres? carres?|sqm|sq\s*m)/i);
+  const bedroomsMatch = q.match(/(\d{1,2})\s*(?:chambres?|bedrooms?|beds?)/i);
+  const budgetMatch =
+    q.match(/(?:moins de|sous|budget(?: max)?|max(?:imum)?|under|below|up to)\s*([\d\s.,]+)\s*(?:€|eur|euros?|\$|usd|£|gbp)?/i) ??
+    q.match(/([\d\s.,]{4,})\s*(?:€|eur|euros?|\$|usd|£|gbp)/i);
 
-  const house = /\b(maison|maisons|house|houses|villa|villas|home|homes)\b/i.test(q);
+  const house = /\b(maison|maisons|house|houses|villa|villas|home|homes|haus|casa|huis)\b/i.test(q);
+
   return {
     category: "real_estate",
     intent: "buy",
     propertyType: house ? "house" : undefined,
-    city,
-    country: city === "London" ? "United Kingdom" : city ? "France" : undefined,
-    location: city ? `${city}${city === "London" ? ", United Kingdom" : ", France"}` : undefined,
-    currency: city === "London" ? "GBP" : "EUR",
-    budgetMax: parseLooseNumber(budget?.[1]),
-    minSurface: surface ? Number(surface[1]) : undefined,
-    minBedrooms: bedrooms ? Number(bedrooms[1]) : undefined,
+    city: location.city,
+    country: location.country,
+    location: [location.city, location.country].filter(Boolean).join(", ") || undefined,
+    currency: location.currency ?? "EUR",
+    budgetMax: parseSimpleNumber(budgetMatch?.[1]),
+    minSurface: surfaceMatch ? Number(surfaceMatch[1].replace(",", ".")) : undefined,
+    minBedrooms: bedroomsMatch ? Number(bedroomsMatch[1]) : undefined,
     requirements: [],
     preferences: [],
     sortPriority: "best_match",
   };
 }
 
-function parsePrice(text: string) {
-  const patterns = [
-    /(?:€|eur)\s*([\d\s.,]{4,})/i,
-    /([\d\s.,]{4,})\s*(?:€|eur|euros?)/i,
-    /(?:£|gbp)\s*([\d\s.,]{4,})/i,
-    /([\d\s.,]{4,})\s*(?:£|gbp)/i,
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    const n = parseLooseNumber(m?.[1]);
-    if (n && n >= 10000 && n <= 100000000) return Math.round(n);
+function parseSurface(text: string) {
+  const metric = text.match(/(\d{2,4}(?:[.,]\d+)?)\s*(?:m²|m2|sqm|sq\s*m)\b/i);
+  if (metric?.[1]) {
+    const value = parseSimpleNumber(metric[1]);
+    if (value && value >= 10 && value <= 5000) return Math.round(value * 10) / 10;
   }
+
+  const imperial = text.match(/([\d,]{3,7})\s*(?:sq\.?\s*ft|square\s*feet|sqft)\b/i);
+  if (imperial?.[1]) {
+    const sqft = Number(imperial[1].replace(/,/g, ""));
+    if (Number.isFinite(sqft) && sqft >= 100 && sqft <= 100000) {
+      return Math.round(sqft * 0.092903 * 10) / 10;
+    }
+  }
+
   return undefined;
 }
 
-function parseSurface(text: string) {
-  const m = text.match(/(\d{2,4}(?:[.,]\d+)?)\s*(?:m²|m2|sqm|sq m)\b/i);
-  const n = parseLooseNumber(m?.[1]);
-  return n && n >= 10 && n <= 5000 ? n : undefined;
-}
-
 function parseBedrooms(text: string) {
-  const m = text.match(/(\d{1,2})\s*(?:chambres?|bedrooms?|beds?)\b/i);
-  const n = m ? Number(m[1]) : undefined;
-  return n && n <= 30 ? n : undefined;
+  const match = text.match(/(\d{1,2})\s*(?:chambres?|bedrooms?|beds?|bed)\b/i);
+  const value = match ? Number(match[1]) : undefined;
+  return value && value <= 30 ? value : undefined;
 }
 
 function detectKind(text: string): Listing["propertyKind"] {
   const q = norm(text);
   if (/\b(villa|villas)\b/.test(q)) return "villa";
-  if (/\b(appartement|apartment|flat|studio)\b/.test(q)) return "apartment";
+  if (/\b(appartement|apartment|flat|studio|condo|condominium)\b/.test(q)) return "apartment";
   if (/\b(programme neuf|new build|new development)\b/.test(q)) return "new_build_project";
-  if (/\b(maison|house|home|pavillon)\b/.test(q)) return "existing_house";
+  if (/\b(maison|house|home|pavillon|detached|townhouse|haus|casa|huis)\b/.test(q)) return "existing_house";
   return "unknown";
 }
 
-function locationFromText(text: string, criteria: Criteria) {
-  if (criteria.city && norm(text).includes(norm(criteria.city))) return criteria.city;
-  return criteria.city;
+function isClearlyIrrelevant(text: string) {
+  const q = norm(text);
+  return /\b(vacation rental|location vacances|hotel|booking|airbnb|emploi|job|actualité|actualite|news|wikipedia|definition|dictionary)\b/.test(q);
 }
 
-function score(result: FirecrawlResult, criteria: Criteria): Listing | null {
+function sourceTrust(domain: string, country?: string) {
+  const preferred = country ? COUNTRY_DOMAINS[country] ?? [] : [];
+  if (preferred.some((item) => domain === item || domain.endsWith(`.${item}`))) return 12;
+  if (/properstar|jamesedition|sothebysrealty|engelvoelkers/.test(domain)) return 6;
+  return 0;
+}
+
+function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
   if (!result.url) return null;
+
   const title = clean(result.title) || "Annonce immobilière";
-  const description = clean(result.description);
+  const description = clean(result.content);
   const combined = `${title} ${description}`;
-  const q = norm(combined);
+  if (isClearlyIrrelevant(combined)) return null;
 
-  const obviousBad = /\b(location vacances|vacation rental|hotel|booking|airbnb|emploi|job|actualité|news)\b/.test(q);
-  if (obviousBad) return null;
-
-  const kind = detectKind(combined);
-  const price = parsePrice(combined);
   const surface = parseSurface(combined);
+  const priceResult = parsePriceFromText(combined, criteria.currency);
+  const price = sanitizePropertyPrice(priceResult.value, priceResult.currency ?? criteria.currency, surface);
   const bedrooms = parseBedrooms(combined);
+  const kind = detectKind(combined);
+  const domain = host(result.url);
+
   const reasons: string[] = [];
   const compromises: string[] = [];
-  let matchScore = 45;
-  let valueScore = 50;
+  let matchScore = 44;
+  let valueScore = 50 + sourceTrust(domain, criteria.country);
 
   if (criteria.city) {
-    if (q.includes(norm(criteria.city))) { matchScore += 22; reasons.push(`Localisation ${criteria.city} détectée`); }
-    else { matchScore -= 8; compromises.push(`Localisation ${criteria.city} non confirmée dans le snippet`); }
+    if (norm(combined).includes(norm(criteria.city))) {
+      matchScore += 23;
+      reasons.push(`${criteria.city} détecté dans l'annonce`);
+    } else {
+      matchScore -= 8;
+      compromises.push(`${criteria.city} non confirmé dans l'extrait`);
+    }
+  }
+
+  if (criteria.country && norm(combined).includes(norm(criteria.country))) {
+    matchScore += 5;
   }
 
   if (criteria.propertyType === "house") {
-    if (kind === "existing_house" || kind === "villa" || /\bmaison\b/.test(q)) { matchScore += 18; reasons.push("Type maison détecté"); }
-    else if (kind === "apartment") { matchScore -= 28; compromises.push("Semble être un appartement"); }
-    else { matchScore -= 3; compromises.push("Type exact non confirmé"); }
+    if (kind === "existing_house" || kind === "villa") {
+      matchScore += 18;
+      reasons.push("Type maison détecté");
+    } else if (kind === "apartment") {
+      matchScore -= 30;
+      compromises.push("Semble être un appartement");
+    } else {
+      compromises.push("Type exact non confirmé");
+    }
   }
 
   if (criteria.minSurface) {
     if (surface !== undefined) {
-      if (surface >= criteria.minSurface) { matchScore += 14; reasons.push(`Surface ${surface} m²`); }
-      else {
+      if (surface >= criteria.minSurface) {
+        matchScore += 14;
+        reasons.push(`${surface} m²`);
+      } else {
         const gap = (criteria.minSurface - surface) / criteria.minSurface;
-        if (gap <= 0.1) { matchScore += 4; compromises.push(`${surface} m², légèrement sous ${criteria.minSurface} m²`); }
-        else if (gap <= 0.25) { matchScore -= 5; compromises.push(`${surface} m² sous le minimum souhaité`); }
-        else { matchScore -= 14; compromises.push(`Surface nettement sous ${criteria.minSurface} m²`); }
+        if (gap <= 0.1) {
+          matchScore += 4;
+          compromises.push(`${surface} m², légèrement sous ${criteria.minSurface} m²`);
+        } else if (gap <= 0.25) {
+          matchScore -= 5;
+          compromises.push(`${surface} m² sous le minimum souhaité`);
+        } else {
+          matchScore -= 14;
+          compromises.push(`Surface nettement sous ${criteria.minSurface} m²`);
+        }
       }
-    } else { compromises.push("Surface non confirmée"); }
+    } else {
+      compromises.push("Surface non confirmée");
+    }
   }
 
   if (criteria.budgetMax && price !== undefined) {
-    if (price <= criteria.budgetMax) { matchScore += 10; valueScore += 8; reasons.push("Dans le budget"); }
-    else {
+    if (price <= criteria.budgetMax) {
+      matchScore += 10;
+      valueScore += 8;
+      reasons.push("Dans le budget");
+    } else {
       const over = (price - criteria.budgetMax) / criteria.budgetMax;
-      if (over <= .1) compromises.push("Légèrement au-dessus du budget");
-      else { matchScore -= 12; compromises.push("Au-dessus du budget"); }
+      if (over <= 0.1) compromises.push("Légèrement au-dessus du budget");
+      else {
+        matchScore -= 12;
+        compromises.push("Au-dessus du budget");
+      }
     }
   }
 
   if (criteria.minBedrooms && bedrooms !== undefined) {
-    if (bedrooms >= criteria.minBedrooms) { matchScore += 8; reasons.push(`${bedrooms} chambres`); }
-    else { matchScore -= 8; compromises.push("Moins de chambres que demandé"); }
+    if (bedrooms >= criteria.minBedrooms) {
+      matchScore += 8;
+      reasons.push(`${bedrooms} chambres`);
+    } else {
+      matchScore -= 8;
+      compromises.push("Moins de chambres que demandé");
+    }
   }
 
-  const domain = host(result.url);
-  if (/seloger|ouestfrance-immo|bienici|logic-immo|fnaim|lefigaro|leboncoin|orpi|century21|laforet|iadfrance|safti|properstar/.test(domain)) {
-    valueScore += 8;
-  }
-
-  if (price && surface) {
-    const ppm2 = Math.round(price / surface);
-    if (ppm2 > 0 && ppm2 < 10000) valueScore += 4;
+  if (priceResult.confidence === "confirmed" && price !== undefined) {
+    reasons.push("Prix détecté avec devise explicite");
+  } else if (price === undefined) {
+    compromises.push("Prix non confirmé");
   }
 
   matchScore = Math.max(0, Math.min(100, Math.round(matchScore)));
   valueScore = Math.max(0, Math.min(100, Math.round(valueScore)));
-  const orbitScore = Math.max(0, Math.min(100, Math.round(matchScore * .78 + valueScore * .22)));
+  const orbitScore = Math.max(0, Math.min(100, Math.round(matchScore * 0.78 + valueScore * 0.22)));
 
   return {
     id: "",
@@ -232,13 +318,13 @@ function score(result: FirecrawlResult, criteria: Criteria): Listing | null {
     source: domain,
     parentSource: domain,
     title,
-    description: description || "Informations disponibles depuis le résultat de recherche.",
+    description: description || "Informations disponibles depuis le moteur de recherche.",
     price,
-    currency: criteria.currency,
+    currency: priceResult.currency ?? criteria.currency,
     surface,
     bedrooms,
-    location: locationFromText(combined, criteria),
-    images: result.image?.startsWith("http") ? [result.image] : [],
+    location: criteria.location,
+    images: (result.thumbnail ?? result.img_src)?.startsWith("http") ? [result.thumbnail ?? result.img_src ?? ""] : [],
     pricePerM2: price && surface ? Math.round(price / surface) : undefined,
     propertyKind: kind,
     matchScore,
@@ -247,41 +333,77 @@ function score(result: FirecrawlResult, criteria: Criteria): Listing | null {
     reasons: reasons.slice(0, 8),
     compromises: compromises.slice(0, 8),
     extractedAt: new Date().toISOString(),
+    priceConfidence: priceResult.confidence,
   };
 }
 
-async function firecrawlSearch(apiKey: string, query: string, limit = 10) {
+async function searxngSearch(query: string, pageno = 1): Promise<SearXNGResult[]> {
+  const base = (process.env.SEARXNG_URL ?? "http://localhost:8080").replace(/\/$/, "");
+
   try {
-    const response = await fetch("https://api.firecrawl.dev/v2/search", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query, limit, sources: ["web"] }),
+    const url = new URL(`${base}/search`);
+    url.searchParams.set("q", query);
+    url.searchParams.set("format", "json");
+    url.searchParams.set("pageno", String(pageno));
+    url.searchParams.set("safesearch", "0");
+
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
       cache: "no-store",
+      signal: AbortSignal.timeout(7000),
     });
-    const payload = await response.json() as FirecrawlResponse;
-    if (!response.ok || !payload.success) return { results: [] as FirecrawlResult[], credits: 0 };
-    return { results: payload.data?.web ?? [], credits: payload.creditsUsed ?? 0 };
+
+    if (!response.ok) return [];
+    const payload = (await response.json()) as SearXNGResponse;
+    return Array.isArray(payload.results) ? payload.results : [];
   } catch {
-    return { results: [] as FirecrawlResult[], credits: 0 };
+    return [];
   }
 }
 
 function buildQueries(original: string, criteria: Criteria) {
   const city = criteria.city ?? "";
-  const area = criteria.minSurface ? `${criteria.minSurface} m2` : "";
-  const type = criteria.propertyType === "house" ? "maison" : "immobilier";
-  const base = [type, "à vendre", city, area].filter(Boolean).join(" ");
+  const country = criteria.country ?? "";
+  const areaMetric = criteria.minSurface ? `${criteria.minSurface} m2` : "";
+  const areaImperial = criteria.minSurface && criteria.country === "United States"
+    ? `${Math.round(criteria.minSurface / 0.092903)} sqft`
+    : "";
+  const localTerms = COUNTRY_TERMS[criteria.country ?? ""] ?? "house for sale real estate";
+
   const queries = [
     original,
-    base,
-    `${type} ${city} ${area} immobilier`,
-    `site:ouestfrance-immo.com ${type} ${city} ${area}`,
-    `site:seloger.com ${type} ${city} ${area}`,
-    `site:bienici.com ${type} ${city} ${area}`,
-    `site:leboncoin.fr ${type} ${city} ${area}`,
-    `site:properstar.com ${type} ${city} ${area}`,
-  ].map(clean).filter(Boolean);
-  return [...new Set(queries)].slice(0, 8);
+    [localTerms, city, country, areaMetric].filter(Boolean).join(" "),
+    ["house for sale", city, country, areaImperial || areaMetric].filter(Boolean).join(" "),
+  ];
+
+  for (const domain of (COUNTRY_DOMAINS[criteria.country ?? ""] ?? []).slice(0, 5)) {
+    queries.push(`site:${domain} ${city} ${areaImperial || areaMetric} ${criteria.propertyType === "house" ? "house" : "property"}`);
+  }
+
+  return [...new Set(queries.map(clean).filter(Boolean))].slice(0, 8);
+}
+
+function dedupeResults(results: SearXNGResult[]) {
+  const seen = new Set<string>();
+  const output: SearXNGResult[] = [];
+
+  for (const item of results) {
+    if (!item.url) continue;
+    let key = item.url;
+    try {
+      const url = new URL(item.url);
+      url.hash = "";
+      ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"].forEach((param) => url.searchParams.delete(param));
+      key = `${url.origin}${url.pathname}${url.search}`.replace(/\/$/, "");
+    } catch {
+      // keep original URL
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+
+  return output;
 }
 
 export async function proxy(request: NextRequest) {
@@ -292,47 +414,44 @@ export async function proxy(request: NextRequest) {
   try {
     const body = await request.json();
     const query = typeof body?.query === "string" ? body.query.trim() : "";
-    if (!query) return NextResponse.json({ success: false, error: "La recherche est vide." }, { status: 400 });
 
-    const apiKey = process.env.FIRECRAWL_API_KEY;
-    if (!apiKey) return NextResponse.next(); // allow the route's own error handling
+    if (!query) {
+      return NextResponse.json({ success: false, error: "La recherche est vide." }, { status: 400 });
+    }
 
-    const criteria = parseCriteria(query);
+    const criteria = await parseCriteria(query);
     const queries = buildQueries(query, criteria);
-    const jobs = await Promise.all(queries.map(q => firecrawlSearch(apiKey, q, 10)));
-    const creditsUsed = jobs.reduce((sum, j) => sum + j.credits, 0);
 
-    const all = jobs.flatMap(j => j.results);
-    const seen = new Set<string>();
-    const unique: FirecrawlResult[] = [];
-    for (const item of all) {
-      if (!item.url) continue;
-      let key = item.url;
-      try { const u = new URL(item.url); u.hash = ""; key = `${u.origin}${u.pathname}`.replace(/\/$/, ""); } catch {}
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(item);
+    // SearXNG is the primary and free/self-hosted search engine.
+    const firstPass = await Promise.all(queries.map((searchQuery) => searxngSearch(searchQuery, 1)));
+    let unique = dedupeResults(firstPass.flat());
+
+    // If recall is low, fetch a second SearXNG page for the strongest generic queries.
+    if (unique.length < 20) {
+      const secondPass = await Promise.all(queries.slice(0, 3).map((searchQuery) => searxngSearch(searchQuery, 2)));
+      unique = dedupeResults([...unique, ...secondPass.flat()]);
     }
 
-    let listings = unique.map(r => score(r, criteria)).filter((x): x is Listing => Boolean(x));
+    let listings = unique
+      .map((result) => toListing(result, criteria))
+      .filter((item): item is Listing => Boolean(item));
 
-    // Keep houses first when requested, but do not hard-filter unknown types.
     if (criteria.propertyType === "house") {
-      listings = listings.filter(l => l.propertyKind !== "apartment" || l.orbitScore >= 70);
+      // Explicit apartments are excluded, unknown types survive as fallback.
+      listings = listings.filter((listing) => listing.propertyKind !== "apartment");
     }
 
-    listings.sort((a,b) => b.orbitScore - a.orbitScore);
-    listings = listings.slice(0, TARGET).map((l,i) => ({ ...l, id: `listing-${i}` }));
+    listings.sort((a, b) => b.orbitScore - a.orbitScore);
+    listings = listings.slice(0, TARGET).map((listing, index) => ({ ...listing, id: `listing-${index}` }));
 
-    // Sources shown by the UI. Use unique ids even when the same domain appears repeatedly.
-    const sources = unique.slice(0, 30).map((s,i) => ({
-      id: `source-${i}`,
-      title: clean(s.title) || host(s.url ?? ""),
-      description: clean(s.description),
-      url: s.url ?? "",
-      position: s.position ?? i + 1,
-      source: host(s.url ?? ""),
-      sourceScore: Math.max(1, 100 - i),
+    const sources = unique.slice(0, 40).map((source, index) => ({
+      id: `source-${index}`,
+      title: clean(source.title) || host(source.url ?? ""),
+      description: clean(source.content),
+      url: source.url ?? "",
+      position: index + 1,
+      source: host(source.url ?? ""),
+      sourceScore: Math.max(1, 100 - index),
     }));
 
     return NextResponse.json({
@@ -349,15 +468,16 @@ export async function proxy(request: NextRequest) {
       recoveryPoolCount: listings.length,
       verifiedListingCount: listings.length,
       targetListingCount: TARGET,
-      confirmedPriceCount: listings.filter(l => typeof l.price === "number").length,
-      photoCount: listings.filter(l => l.images.length > 0).length,
-      creditsUsed,
+      confirmedPriceCount: listings.filter((listing) => typeof listing.price === "number").length,
+      photoCount: listings.filter((listing) => listing.images.length > 0).length,
+      creditsUsed: 0,
       sources,
       listings,
-      searchEngineVersion: "7.0-proxy-rescue",
+      searchEngineVersion: "8.0-searxng-global",
+      searchProvider: "SearXNG",
     });
   } catch (error) {
-    console.error("ORBIT proxy search error:", error);
+    console.error("ORBIT SearXNG proxy error:", error);
     return NextResponse.next();
   }
 }
