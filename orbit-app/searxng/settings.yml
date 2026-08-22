@@ -16,5 +16,45 @@ server:
   limiter: false
   image_proxy: true
 
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+  pool_connections: 100
+  pool_maxsize: 20
+
+# ORBIT parle uniquement à SearXNG. Les moteurs ci-dessous sont interrogés
+# par SearXNG lui-même afin d'éviter qu'un seul moteur externe bloque toute
+# la recherche. DuckDuckGo n'est volontairement pas activé.
+engines:
+  - name: google
+    engine: google
+    shortcut: go
+    categories: general
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    categories: general
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    categories: general
+    disabled: false
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    categories: general
+    disabled: false
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    categories: general
+    disabled: false
+
 ui:
   static_use_hash: true
