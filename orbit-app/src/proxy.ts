@@ -147,10 +147,6 @@ function decodeHtml(value: string) {
     .replace(/&gt;/gi, ">");
 }
 
-function stripTags(value: string) {
-  return clean(decodeHtml(value.replace(/<[^>]+>/g, " ")));
-}
-
 function host(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -498,53 +494,11 @@ async function searxngSearch(query: string, pageno = 1): Promise<SearchResult[]>
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
       cache: "no-store",
-      signal: AbortSignal.timeout(4500),
+      signal: AbortSignal.timeout(6500),
     });
     if (!response.ok) return [];
     const payload = (await response.json()) as { results?: SearchResult[] };
     return Array.isArray(payload.results) ? payload.results : [];
-  } catch {
-    return [];
-  }
-}
-
-function unwrapDuckDuckGoUrl(value: string) {
-  try {
-    const decoded = decodeHtml(value);
-    const absolute = decoded.startsWith("//") ? `https:${decoded}` : decoded;
-    const url = new URL(absolute, "https://duckduckgo.com");
-    const uddg = url.searchParams.get("uddg");
-    return uddg ? decodeURIComponent(uddg) : url.href;
-  } catch {
-    return value;
-  }
-}
-
-async function duckDuckGoSearch(query: string): Promise<SearchResult[]> {
-  try {
-    const url = `https://html.duckduckgo.com/html/?${new URLSearchParams({ q: query }).toString()}`;
-    const response = await fetch(url, {
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
-      },
-      cache: "no-store",
-      signal: AbortSignal.timeout(6500),
-    });
-    if (!response.ok) return [];
-    const html = await response.text();
-    const blocks = [...html.matchAll(/<div[^>]+class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi)].slice(0, 20);
-    const results: SearchResult[] = [];
-    for (const block of blocks) {
-      const body = block[1] ?? "";
-      const link = body.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-      if (!link?.[1]) continue;
-      const snippet = body.match(/<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/i)?.[1] ?? "";
-      const resultUrl = unwrapDuckDuckGoUrl(link[1]);
-      if (!/^https?:\/\//i.test(resultUrl)) continue;
-      results.push({ url: resultUrl, title: stripTags(link[2] ?? ""), content: stripTags(snippet) });
-    }
-    return results;
   } catch {
     return [];
   }
@@ -621,24 +575,43 @@ export async function proxy(request: NextRequest) {
     const criteria = await parseCriteria(query, filters);
     const queries = buildQueries(query, criteria);
 
-    const searxFirst = await Promise.all(queries.map((searchQuery) => searxngSearch(searchQuery, 1)));
-    let unique = dedupeResults(searxFirst.flat());
-    let provider = "SearXNG";
-
-    if (unique.length < 12) {
-      const ddg = await Promise.all(queries.slice(0, 5).map((searchQuery) => duckDuckGoSearch(searchQuery)));
-      unique = dedupeResults([...unique, ...ddg.flat()]);
-      provider = unique.length > searxFirst.flat().length ? "SearXNG + DuckDuckGo" : provider;
-    }
+    const firstPageJobs = await Promise.all(queries.map((searchQuery) => searxngSearch(searchQuery, 1)));
+    let unique = dedupeResults(firstPageJobs.flat());
 
     if (unique.length < 20) {
-      const searxSecond = await Promise.all(queries.slice(0, 3).map((searchQuery) => searxngSearch(searchQuery, 2)));
-      unique = dedupeResults([...unique, ...searxSecond.flat()]);
+      const secondPageJobs = await Promise.all(queries.slice(0, 5).map((searchQuery) => searxngSearch(searchQuery, 2)));
+      unique = dedupeResults([...unique, ...secondPageJobs.flat()]);
     }
 
-    // Critical safety: when free providers are unavailable, do not swallow the
-    // original /api/search route. Let the route's own fallback logic run.
-    if (unique.length === 0) return NextResponse.next();
+    if (unique.length < 10) {
+      const thirdPageJobs = await Promise.all(queries.slice(0, 3).map((searchQuery) => searxngSearch(searchQuery, 3)));
+      unique = dedupeResults([...unique, ...thirdPageJobs.flat()]);
+    }
+
+    if (unique.length === 0) {
+      return NextResponse.json({
+        success: true,
+        query,
+        searchQuery: queries[0] ?? query,
+        criteria,
+        sourceCount: 0,
+        candidateCount: 0,
+        listingCount: 0,
+        analyzedCandidateCount: 0,
+        snippetListingCount: 0,
+        enrichedListingCount: 0,
+        recoveryPoolCount: 0,
+        verifiedListingCount: 0,
+        targetListingCount: TARGET,
+        confirmedPriceCount: 0,
+        photoCount: 0,
+        creditsUsed: null,
+        sources: [],
+        listings: [],
+        searchEngineVersion: "12.0-searxng-only",
+        searchProvider: "SearXNG",
+      });
+    }
 
     let listings = unique.map((result) => toListing(result, criteria)).filter((item): item is Listing => Boolean(item));
     listings.sort((a, b) => b.orbitScore - a.orbitScore);
@@ -685,12 +658,22 @@ export async function proxy(request: NextRequest) {
       creditsUsed: null,
       sources,
       listings,
-      searchEngineVersion: "11.0-resilient-free-search",
-      searchProvider: provider,
+      searchEngineVersion: "12.0-searxng-only",
+      searchProvider: "SearXNG",
     });
   } catch (error) {
-    console.error("ORBIT proxy search error:", error);
-    return NextResponse.next();
+    console.error("ORBIT SearXNG search error:", error);
+    return NextResponse.json({
+      success: false,
+      error: "SearXNG n'a pas pu effectuer la recherche.",
+      sourceCount: 0,
+      candidateCount: 0,
+      listingCount: 0,
+      sources: [],
+      listings: [],
+      searchProvider: "SearXNG",
+      creditsUsed: null,
+    }, { status: 503 });
   }
 }
 
