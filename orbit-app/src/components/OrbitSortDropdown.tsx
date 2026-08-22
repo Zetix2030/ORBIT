@@ -1,29 +1,35 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-type SortMode =
-  | "score"
-  | "price-asc"
-  | "price-desc"
-  | "surface-desc"
-  | "surface-asc";
+type SortMode = "score" | "price-asc" | "price-desc" | "surface-desc" | "surface-asc";
 
-const OPTIONS: Array<{ value: SortMode; label: string; hint: string }> = [
-  { value: "score", label: "ORBIT Score", hint: "Meilleure correspondance" },
-  { value: "price-asc", label: "Prix croissant", hint: "Du moins cher au plus cher" },
-  { value: "price-desc", label: "Prix décroissant", hint: "Du plus cher au moins cher" },
-  { value: "surface-desc", label: "Surface décroissante", hint: "Les plus grandes d'abord" },
-  { value: "surface-asc", label: "Surface croissante", hint: "Les plus petites d'abord" },
+const OPTIONS: Array<{ value: SortMode; label: string }> = [
+  { value: "score", label: "ORBIT Score" },
+  { value: "price-asc", label: "Prix croissant" },
+  { value: "price-desc", label: "Prix décroissant" },
+  { value: "surface-desc", label: "Surface décroissante" },
+  { value: "surface-asc", label: "Surface croissante" },
 ];
 
-function findSortTarget() {
-  return (
-    Array.from(document.querySelectorAll<HTMLElement>("div")).find((element) =>
-      /^Triées? par ORBIT Score$/i.test(element.textContent?.trim() ?? ""),
-    ) ?? null
+function findSortTarget(): HTMLElement | null {
+  const existing = document.querySelector<HTMLElement>('[data-orbit-sort-host="true"]');
+  if (existing) return existing;
+
+  const target = Array.from(document.querySelectorAll<HTMLElement>("div")).find((element) =>
+    /^Triées? par ORBIT Score$/i.test(element.textContent?.replace(/\s+/g, " ").trim() ?? ""),
   );
+
+  if (!target) return null;
+  target.dataset.orbitSortHost = "true";
+  target.style.position = "relative";
+  target.style.minWidth = "190px";
+  target.style.minHeight = "40px";
+  target.style.padding = "0";
+  target.style.color = "transparent";
+  target.style.overflow = "visible";
+  return target;
 }
 
 function resultCards() {
@@ -46,19 +52,15 @@ function parseSurface(card: HTMLElement) {
 
 function parsePrice(card: HTMLElement) {
   const lines = card.innerText.split("\n").map((line) => line.trim()).filter(Boolean);
-
   for (const line of lines) {
     if (/Prix non confirmé/i.test(line)) continue;
     if (!/(?:€|\$|£|EUR|USD|GBP|CAD|AUD|CHF)/i.test(line)) continue;
-
     const match = line.match(/([\d\s.,]{4,})/);
     if (!match) continue;
-
     const compact = match[1].replace(/[\s.,]/g, "");
     const value = Number(compact);
     if (Number.isFinite(value) && value >= 10_000) return value;
   }
-
   return undefined;
 }
 
@@ -74,7 +76,6 @@ function refreshRanks(cards: HTMLElement[]) {
 function applySort(mode: SortMode) {
   const cards = resultCards();
   if (cards.length < 2) return;
-
   const parent = cards[0]?.parentElement;
   if (!parent || !cards.every((card) => card.parentElement === parent)) return;
 
@@ -108,25 +109,12 @@ function applySort(mode: SortMode) {
 
 export default function OrbitSortDropdown() {
   const [target, setTarget] = useState<HTMLElement | null>(null);
-  const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<SortMode>("score");
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  const current = useMemo(
-    () => OPTIONS.find((option) => option.value === mode) ?? OPTIONS[0],
-    [mode],
-  );
 
   useEffect(() => {
     const locate = () => {
       const next = findSortTarget();
-      if (next) {
-        next.style.position = "relative";
-        next.style.minWidth = "178px";
-        next.style.minHeight = "38px";
-        next.style.color = "transparent";
-      }
-      setTarget(next);
+      setTarget((current) => current?.isConnected ? current : next);
     };
 
     locate();
@@ -139,58 +127,27 @@ export default function OrbitSortDropdown() {
     applySort(mode);
   }, [mode]);
 
-  useEffect(() => {
-    const close = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
-
   if (!target) return null;
 
   return createPortal(
-    <div ref={rootRef} className="absolute inset-0 z-40 text-white">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex h-full w-full items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 text-[10px] text-white/50 transition hover:border-white/[0.12] hover:bg-white/[0.045] hover:text-white/75"
+    <div className="absolute inset-0 z-[80] flex items-center">
+      <select
+        aria-label="Trier les résultats"
+        value={mode}
+        onChange={(event) => {
+          const next = event.target.value as SortMode;
+          setMode(next);
+          requestAnimationFrame(() => applySort(next));
+        }}
+        className="h-full w-full cursor-pointer appearance-none rounded-xl border border-white/[0.09] bg-[#111316] px-3 pr-8 text-[11px] font-medium text-white/70 outline-none transition hover:border-white/[0.16] hover:bg-[#15181b] focus:border-white/[0.2]"
       >
-        <span className="truncate">{current.label}</span>
-        <span className={`text-[9px] text-white/30 transition-transform ${open ? "rotate-180" : ""}`}>⌄</span>
-      </button>
-
-      {open && (
-        <div className="absolute right-0 top-[calc(100%+8px)] w-[230px] overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0b0c0f] p-1.5 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-          <div className="px-2.5 pb-1.5 pt-1 text-[9px] uppercase tracking-[0.16em] text-white/22">
-            Trier les résultats
-          </div>
-
-          {OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => {
-                setMode(option.value);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center justify-between rounded-xl px-2.5 py-2.5 text-left transition ${
-                mode === option.value
-                  ? "bg-white text-black"
-                  : "text-white/62 hover:bg-white/[0.055] hover:text-white"
-              }`}
-            >
-              <span>
-                <span className="block text-[11px] font-medium">{option.label}</span>
-                <span className={`mt-0.5 block text-[9px] ${mode === option.value ? "text-black/45" : "text-white/24"}`}>
-                  {option.hint}
-                </span>
-              </span>
-              {mode === option.value && <span className="text-[10px]">✓</span>}
-            </button>
-          ))}
-        </div>
-      )}
+        {OPTIONS.map((option) => (
+          <option key={option.value} value={option.value} className="bg-[#111316] text-white">
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <span className="pointer-events-none absolute right-3 text-[10px] text-white/35">⌄</span>
     </div>,
     target,
   );
