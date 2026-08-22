@@ -1,0 +1,32 @@
+name: ORBIT checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "orbit-app/**"
+      - ".github/workflows/orbit-check.yml"
+  pull_request:
+    paths:
+      - "orbit-app/**"
+      - ".github/workflows/orbit-check.yml"
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orbit-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: orbit-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript
+        run: npx tsc --noEmit
