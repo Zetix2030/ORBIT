@@ -14,10 +14,7 @@ type SearXNGResult = {
   img_src?: string;
 };
 
-type SearXNGResponse = {
-  query?: string;
-  results?: SearXNGResult[];
-};
+type SearXNGResponse = { query?: string; results?: SearXNGResult[] };
 
 type FilterOverrides = {
   budgetMin?: number;
@@ -145,11 +142,7 @@ function norm(value: unknown) {
 }
 
 function host(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "web";
-  }
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "web"; }
 }
 
 function numeric(value: unknown) {
@@ -162,21 +155,38 @@ function numeric(value: unknown) {
 
 function lastMatchNumber(query: string, regex: RegExp) {
   const matches = [...query.matchAll(regex)];
-  if (!matches.length) return undefined;
-  return numeric(matches[matches.length - 1]?.[1]);
+  return matches.length ? numeric(matches[matches.length - 1]?.[1]) : undefined;
 }
 
 async function parseCriteria(query: string, overrides: FilterOverrides = {}): Promise<Criteria> {
   const q = norm(query);
   const location = await detectLocationWithAI(query, process.env.OPENAI_API_KEY);
 
-  const minSurface = lastMatchNumber(q, /(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|metres? carres?|sqm|sq\s*m)/gi);
+  const explicitMinSurface = lastMatchNumber(
+    q,
+    /(?:surface\s*)?(?:minimum|min\.?|au moins|at least)\s*(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|sqm|sq\s*m)/gi,
+  );
+  const explicitMaxSurface = lastMatchNumber(
+    q,
+    /(?:surface\s*)?(?:maximum|max\.?|jusqu(?:a|')a|up to)\s*(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|sqm|sq\s*m)/gi,
+  );
+  const anySurface = lastMatchNumber(q, /(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|metres? carres?|sqm|sq\s*m)/gi);
+
   const bedrooms = lastMatchNumber(q, /(\d{1,2})\s*(?:chambres?|bedrooms?|beds?)/gi);
   const bathrooms = lastMatchNumber(q, /(\d{1,2})\s*(?:sdb|salles? de bain|bathrooms?|baths?)/gi);
-  const budgetMax = lastMatchNumber(q, /(?:moins de|sous|budget(?: max)?|max(?:imum)?|under|below|up to)\s*([\d\s.,]+)\s*(?:€|eur|euros?|\$|usd|£|gbp)?/gi)
-    ?? lastMatchNumber(q, /([\d\s.,]{4,})\s*(?:€|eur|euros?|\$|usd|£|gbp)/gi);
+  const explicitBudgetMin = lastMatchNumber(q, /(?:prix\s*)?(?:minimum|min\.?|au moins|at least)\s*([\d\s.,]+)\s*(?:€|eur|euros?|\$|usd|£|gbp)?/gi);
+  const explicitBudgetMax = lastMatchNumber(
+    q,
+    /(?:moins de|sous|budget(?: max)?|prix\s*max(?:imum)?|maximum|max\.?|under|below|up to)\s*([\d\s.,]+)\s*(?:€|eur|euros?|\$|usd|£|gbp)?/gi,
+  );
+  const bareCurrencyBudget = lastMatchNumber(q, /([\d\s.,]{4,})\s*(?:€|eur|euros?|\$|usd|£|gbp)/gi);
 
   const house = /\b(maison|maisons|house|houses|villa|villas|home|homes|haus|casa|huis)\b/i.test(q);
+  const sortFromQuery: Criteria["sortPriority"] = /tri\s+prix\s+croissant|lowest price|prix le plus bas/i.test(q)
+    ? "lowest_price"
+    : /tri\s+plus grande surface|largest|plus grande surface/i.test(q)
+      ? "largest"
+      : "best_match";
 
   return {
     category: "real_estate",
@@ -186,10 +196,10 @@ async function parseCriteria(query: string, overrides: FilterOverrides = {}): Pr
     country: location.country,
     location: [location.city, location.country].filter(Boolean).join(", ") || undefined,
     currency: location.currency ?? "EUR",
-    budgetMin: numeric(overrides.budgetMin),
-    budgetMax: numeric(overrides.budgetMax) ?? budgetMax,
-    minSurface: numeric(overrides.minSurface) ?? minSurface,
-    maxSurface: numeric(overrides.maxSurface),
+    budgetMin: numeric(overrides.budgetMin) ?? explicitBudgetMin,
+    budgetMax: numeric(overrides.budgetMax) ?? explicitBudgetMax ?? (explicitBudgetMin ? undefined : bareCurrencyBudget),
+    minSurface: numeric(overrides.minSurface) ?? explicitMinSurface ?? (explicitMaxSurface ? undefined : anySurface),
+    maxSurface: numeric(overrides.maxSurface) ?? explicitMaxSurface,
     minBedrooms: numeric(overrides.minBedrooms) ?? bedrooms,
     minBathrooms: numeric(overrides.minBathrooms) ?? bathrooms,
     garden: overrides.garden ?? /\b(jardin|garden)\b/i.test(q),
@@ -199,24 +209,24 @@ async function parseCriteria(query: string, overrides: FilterOverrides = {}): Pr
     parking: overrides.parking ?? /\b(parking|stationnement|carport)\b/i.test(q),
     requirements: [],
     preferences: [],
-    sortPriority: overrides.sortPriority ?? "best_match",
+    sortPriority: overrides.sortPriority ?? sortFromQuery,
   };
 }
 
 function collectSurfaceCandidates(text: string, criteria: Criteria) {
   const candidates: Array<{ value: number; index: number; confidence: number }> = [];
   const metric = /(\d{2,4}(?:[.,]\d+)?)\s*(?:m²|m2|sqm|sq\s*m)\b/gi;
+
   for (const match of text.matchAll(metric)) {
     const value = numeric(match[1]);
     if (!value) continue;
     const index = match.index ?? 0;
-    const context = norm(text.slice(Math.max(0, index - 45), Math.min(text.length, index + match[0].length + 45)));
-    // Do not confuse land/plot/lot size with living area.
-    if (/\b(terrain|parcelle|land|plot|lot|garden size|jardin de|acre|hectare)\b/.test(context)) continue;
+    const context = norm(text.slice(Math.max(0, index - 55), Math.min(text.length, index + match[0].length + 55)));
+    if (/\b(terrain|parcelle|land|plot|lot|garden size|jardin de|acre|hectare|grounds?)\b/.test(context)) continue;
     const maxLiving = criteria.minSurface && criteria.minSurface > 1000 ? 5000 : 1200;
     if (value < 10 || value > maxLiving) continue;
     let confidence = 2;
-    if (/\b(surface habitable|living area|interior|habitable|floor area|living space)\b/.test(context)) confidence += 4;
+    if (/\b(surface habitable|living area|interior|habitable|floor area|living space|interior size)\b/.test(context)) confidence += 5;
     if (criteria.minSurface) confidence += Math.max(0, 3 - Math.abs(value - criteria.minSurface) / Math.max(50, criteria.minSurface));
     candidates.push({ value: Math.round(value * 10) / 10, index, confidence });
   }
@@ -226,12 +236,12 @@ function collectSurfaceCandidates(text: string, criteria: Criteria) {
     const sqft = Number(match[1].replace(/,/g, ""));
     if (!Number.isFinite(sqft) || sqft < 150 || sqft > 30000) continue;
     const index = match.index ?? 0;
-    const context = norm(text.slice(Math.max(0, index - 45), Math.min(text.length, index + match[0].length + 45)));
-    if (/\b(lot|land|plot|acre|lot size)\b/.test(context)) continue;
+    const context = norm(text.slice(Math.max(0, index - 55), Math.min(text.length, index + match[0].length + 55)));
+    if (/\b(lot|land|plot|acre|lot size|grounds?)\b/.test(context)) continue;
     const value = Math.round(sqft * 0.092903 * 10) / 10;
     if (value < 10 || value > 1200) continue;
     let confidence = 2;
-    if (/\b(living|interior|heated|home size|house size)\b/.test(context)) confidence += 4;
+    if (/\b(living|interior|heated|home size|house size|living area)\b/.test(context)) confidence += 5;
     if (criteria.minSurface) confidence += Math.max(0, 3 - Math.abs(value - criteria.minSurface) / Math.max(50, criteria.minSurface));
     candidates.push({ value, index, confidence });
   }
@@ -255,7 +265,7 @@ function parseBathrooms(text: string) {
   return value && value <= 15 ? value : undefined;
 }
 
-function feature(text: string, words: RegExp) {
+function has(text: string, words: RegExp) {
   return words.test(norm(text));
 }
 
@@ -282,7 +292,6 @@ function sourceTrust(domain: string, country?: string) {
 
 function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
   if (!result.url) return null;
-
   const title = clean(result.title) || "Annonce immobilière";
   const description = clean(result.content);
   const combined = `${title} ${description}`;
@@ -290,21 +299,16 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
 
   const surface = parseSurface(combined, criteria);
   const priceResult = parsePriceFromText(combined, criteria.currency);
-  const price = sanitizePropertyPrice(
-    priceResult.value,
-    priceResult.currency ?? criteria.currency,
-    surface,
-    priceResult.confidence,
-  );
+  const price = sanitizePropertyPrice(priceResult.value, priceResult.currency ?? criteria.currency, surface, priceResult.confidence);
   const bedrooms = parseBedrooms(combined);
   const bathrooms = parseBathrooms(combined);
   const kind = detectKind(combined);
   const domain = host(result.url);
-  const garden = feature(combined, /\b(jardin|garden|yard)\b/);
-  const garage = feature(combined, /\bgarage\b/);
-  const pool = feature(combined, /\b(piscine|pool|swimming pool)\b/);
-  const terrace = feature(combined, /\b(terrasse|terrace|patio)\b/);
-  const parking = feature(combined, /\b(parking|stationnement|carport|driveway)\b/);
+  const garden = has(combined, /\b(jardin|garden|yard)\b/);
+  const garage = has(combined, /\bgarage\b/);
+  const pool = has(combined, /\b(piscine|pool|swimming pool)\b/);
+  const terrace = has(combined, /\b(terrasse|terrace|patio)\b/);
+  const parking = has(combined, /\b(parking|stationnement|carport|driveway)\b/);
 
   const reasons: string[] = [];
   const compromises: string[] = [];
@@ -320,7 +324,6 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
       compromises.push(`${criteria.city} non confirmé dans l'extrait`);
     }
   }
-
   if (criteria.country && norm(combined).includes(norm(criteria.country))) matchScore += 5;
 
   if (criteria.propertyType === "house") {
@@ -353,9 +356,7 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
           compromises.push(`Surface nettement sous ${criteria.minSurface} m²`);
         }
       }
-    } else {
-      compromises.push("Surface habitable non confirmée");
-    }
+    } else compromises.push("Surface habitable non confirmée");
   }
 
   if (criteria.maxSurface && surface !== undefined && surface > criteria.maxSurface) {
@@ -411,11 +412,8 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
     }
   }
 
-  if (priceResult.confidence === "confirmed" && price !== undefined) {
-    reasons.push("Prix détecté avec devise explicite");
-  } else {
-    compromises.push("Prix non confirmé");
-  }
+  if (priceResult.confidence === "confirmed" && price !== undefined) reasons.push("Prix détecté avec devise explicite");
+  else compromises.push("Prix non confirmé");
 
   matchScore = Math.max(0, Math.min(100, Math.round(matchScore)));
   valueScore = Math.max(0, Math.min(100, Math.round(valueScore)));
@@ -498,7 +496,6 @@ function buildQueries(original: string, criteria: Criteria) {
   for (const domain of (COUNTRY_DOMAINS[criteria.country ?? ""] ?? []).slice(0, 5)) {
     queries.push(`site:${domain} ${city} ${areaImperial || areaMetric} ${features} ${criteria.propertyType === "house" ? "house" : "property"}`);
   }
-
   return [...new Set(queries.map(clean).filter(Boolean))].slice(0, 8);
 }
 
@@ -555,7 +552,6 @@ export async function proxy(request: NextRequest) {
 
     let listings = unique.map((result) => toListing(result, criteria)).filter((item): item is Listing => Boolean(item));
     const stronglyFiltered = applyStrongFilters(listings, criteria);
-    // Avoid a frustrating zero-result screen: strict-enough matches first, then best alternatives.
     listings = stronglyFiltered.length >= 4 ? stronglyFiltered : listings;
 
     if (criteria.sortPriority === "lowest_price") {
@@ -594,10 +590,10 @@ export async function proxy(request: NextRequest) {
       targetListingCount: TARGET,
       confirmedPriceCount: listings.filter((listing) => listing.priceConfidence === "confirmed").length,
       photoCount: listings.filter((listing) => listing.images.length > 0).length,
-      creditsUsed: 0,
+      creditsUsed: null,
       sources,
       listings,
-      searchEngineVersion: "9.0-searxng-safe-data-filters",
+      searchEngineVersion: "9.1-searxng-safe-data-filters",
       searchProvider: "SearXNG",
     });
   } catch (error) {
