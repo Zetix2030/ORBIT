@@ -161,9 +161,10 @@ function installSearchResponseEnhancer() {
 }
 
 function findSortTarget() {
-  return Array.from(document.querySelectorAll<HTMLElement>("div")).find((element) =>
-    /Triées? par ORBIT Score/i.test(element.textContent?.trim() ?? ""),
-  ) ?? null;
+  return Array.from(document.querySelectorAll<HTMLElement>("div")).find((element) => {
+    const text = element.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    return /^Triées? par ORBIT Score$/i.test(text);
+  }) ?? null;
 }
 
 function resultCards() {
