@@ -58,8 +58,8 @@ function buildSuffix(filters: FilterState) {
   const parts: string[] = [];
   if (filters.budgetMin) parts.push(`prix minimum ${filters.budgetMin}`);
   if (filters.budgetMax) parts.push(`budget max ${filters.budgetMax}`);
-  if (filters.minSurface) parts.push(`minimum ${filters.minSurface} m2`);
-  if (filters.maxSurface) parts.push(`maximum ${filters.maxSurface} m2`);
+  if (filters.minSurface) parts.push(`surface minimum ${filters.minSurface} m2`);
+  if (filters.maxSurface) parts.push(`surface maximum ${filters.maxSurface} m2`);
   if (filters.minBedrooms) parts.push(`${filters.minBedrooms} chambres`);
   if (filters.minBathrooms) parts.push(`${filters.minBathrooms} salles de bain`);
   if (filters.garden) parts.push("jardin");
@@ -67,6 +67,8 @@ function buildSuffix(filters: FilterState) {
   if (filters.pool) parts.push("piscine");
   if (filters.terrace) parts.push("terrasse");
   if (filters.parking) parts.push("parking");
+  if (filters.sortPriority === "lowest_price") parts.push("tri prix croissant");
+  if (filters.sortPriority === "largest") parts.push("tri plus grande surface");
   return parts.join(", ");
 }
 
@@ -101,44 +103,45 @@ export default function OrbitSearchFilters() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
+  function runSearch(nextQuery: string) {
+    const input = getResultsInput();
+    if (!input) return;
+    setReactInputValue(input, nextQuery);
+    window.setTimeout(() => {
+      const container = input.closest("section");
+      const button = Array.from(container?.querySelectorAll("button") ?? []).find(
+        (item) => item.textContent?.trim() === "Rechercher",
+      ) as HTMLButtonElement | undefined;
+      button?.click();
+    }, 50);
+  }
+
   function apply() {
     const input = getResultsInput();
     if (!input) return;
     const base = stripFilterSuffix(input.value);
     const suffix = buildSuffix(filters);
-    const next = suffix ? `${base} | filtres ORBIT: ${suffix}` : base;
-    setReactInputValue(input, next);
-
-    // Expose structured filters for future integrations/debugging.
     window.sessionStorage.setItem("orbit-search-filters", JSON.stringify(filters));
-
-    window.setTimeout(() => {
-      const container = input.closest("section");
-      const button = Array.from(container?.querySelectorAll("button") ?? []).find(
-        (item) => item.textContent?.trim() === "Rechercher",
-      ) as HTMLButtonElement | undefined;
-      button?.click();
-    }, 40);
+    runSearch(suffix ? `${base} | filtres ORBIT: ${suffix}` : base);
   }
 
   function reset() {
-    setFilters(EMPTY);
     const input = getResultsInput();
-    if (!input) return;
-    const base = stripFilterSuffix(input.value);
-    setReactInputValue(input, base);
+    setFilters(EMPTY);
     window.sessionStorage.removeItem("orbit-search-filters");
-    window.setTimeout(() => {
-      const container = input.closest("section");
-      const button = Array.from(container?.querySelectorAll("button") ?? []).find(
-        (item) => item.textContent?.trim() === "Rechercher",
-      ) as HTMLButtonElement | undefined;
-      button?.click();
-    }, 40);
+    if (input) runSearch(stripFilterSuffix(input.value));
   }
 
   const fieldClass =
     "w-full rounded-xl border border-white/[0.07] bg-black/25 px-3 py-2.5 text-[11px] text-white/70 outline-none placeholder:text-white/18 focus:border-white/[0.16]";
+
+  const featureButtons: Array<["garden" | "garage" | "pool" | "terrace" | "parking", string]> = [
+    ["garden", "Jardin"],
+    ["garage", "Garage"],
+    ["pool", "Piscine"],
+    ["terrace", "Terrasse"],
+    ["parking", "Parking"],
+  ];
 
   return createPortal(
     <div className="mt-5 border-t border-white/[0.06] pt-4">
@@ -164,19 +167,13 @@ export default function OrbitSearchFilters() {
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
-        {[
-          ["garden", "Jardin"],
-          ["garage", "Garage"],
-          ["pool", "Piscine"],
-          ["terrace", "Terrasse"],
-          ["parking", "Parking"],
-        ].map(([key, label]) => {
-          const checked = filters[key as keyof FilterState] as boolean;
+        {featureButtons.map(([key, label]) => {
+          const checked = filters[key];
           return (
             <button
               key={key}
               type="button"
-              onClick={() => update(key as keyof FilterState, !checked as never)}
+              onClick={() => update(key, !checked)}
               className={`rounded-xl border px-3 py-2 text-left text-[10px] transition ${
                 checked
                   ? "border-white/20 bg-white text-black"
