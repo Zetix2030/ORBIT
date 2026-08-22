@@ -29,8 +29,6 @@ export function parseLocalizedInteger(raw: string): number | undefined {
 
   const suffix = s.match(/([kmb])$/i)?.[1]?.toLowerCase();
   if (suffix) s = s.slice(0, -1).trim();
-
-  // Price tokens may contain grouped thousands, but never arbitrary words.
   s = s.replace(/[^\d.,\s]/g, "").replace(/\s+/g, "");
   if (!s) return undefined;
 
@@ -43,25 +41,19 @@ export function parseLocalizedInteger(raw: string): number | undefined {
       const whole = s.slice(0, sep).replace(/[.,]/g, "");
       const frac = s.slice(sep + 1).replace(/[.,]/g, "");
       s = frac ? `${whole}.${frac}` : whole;
-    } else {
-      s = s.replace(/[.,]/g, "");
-    }
+    } else s = s.replace(/[.,]/g, "");
   } else if (comma >= 0 && dot >= 0) {
     const last = Math.max(comma, dot);
     const decimals = s.length - last - 1;
-    if (decimals === 2) {
-      s = `${s.slice(0, last).replace(/[.,]/g, "")}.${s.slice(last + 1)}`;
-    } else {
-      s = s.replace(/[.,]/g, "");
-    }
+    s = decimals === 2
+      ? `${s.slice(0, last).replace(/[.,]/g, "")}.${s.slice(last + 1)}`
+      : s.replace(/[.,]/g, "");
   } else if (comma >= 0 || dot >= 0) {
     const sep = comma >= 0 ? "," : ".";
     const parts = s.split(sep);
-    if (parts.length > 2) {
-      s = parts.join("");
-    } else {
+    if (parts.length > 2) s = parts.join("");
+    else {
       const decimals = parts[1]?.length ?? 0;
-      // In property prices a single separator followed by 3 digits is thousands.
       if (decimals === 3) s = parts.join("");
       else if (decimals === 2 && Number(parts[0]) < 1000) s = `${parts[0]}.${parts[1]}`;
       else s = parts.join("");
@@ -73,7 +65,6 @@ export function parseLocalizedInteger(raw: string): number | undefined {
   if (suffix === "k") value *= 1_000;
   if (suffix === "m") value *= 1_000_000;
   if (suffix === "b") value *= 1_000_000_000;
-
   value = Math.round(value);
   return value > 0 ? value : undefined;
 }
@@ -89,15 +80,29 @@ function currencyFromContext(text: string, fallback?: string) {
   return fallback;
 }
 
-function looksLikeRecurringCharge(context: string) {
-  return /(?:\/\s*(?:mo|month|month|mois)|per\s+month|monthly|par\s+mois|mensuel|rent\s+per)/i.test(context);
+function recurringCharge(context: string) {
+  return /(?:\/\s*(?:mo|month|mois)|per\s+month|monthly|par\s+mois|mensuel|rent\s+per|mortgage|hoa|tax(?:es)?|insurance|deposit|charges?)/i.test(context);
 }
 
-function looksLikeUnitPrice(context: string) {
+function unitPrice(context: string) {
   return /(?:per\s+(?:sq\.?\s*ft|sqm|m2|m²)|\/\s*(?:sq\.?\s*ft|sqm|m2|m²)|price\s+per|prix\s+au\s+m)/i.test(context);
 }
 
-function collectExplicitCandidates(text: string, fallbackCurrency?: string) {
+type Candidate = { value: number; currency?: string; index: number; score: number };
+
+function candidateScore(context: string, value: number) {
+  let score = 0;
+  if (/\b(asking price|listing price|sale price|listed at|for sale|price|prix|à vendre|a vendre|purchase|buy|acheter)\b/i.test(context)) score += 9;
+  if (/\b(property|house|home|maison|villa|apartment|appartement|condo|real estate|immobilier)\b/i.test(context)) score += 4;
+  if (recurringCharge(context)) score -= 18;
+  if (unitPrice(context)) score -= 14;
+  if (value < 40_000) score -= 7;
+  if (value >= 80_000 && value <= 15_000_000) score += 3;
+  if (value > 50_000_000) score -= 5;
+  return score;
+}
+
+function collectCandidates(text: string, fallbackCurrency?: string) {
   const token = String.raw`(?:\d{1,3}(?:[\s\u00a0\u202f.,]\d{3})+(?:[.,]\d{1,2})?|\d{4,9}|\d{1,3}(?:[.,]\d{1,2})?\s*[kKmM])`;
   const currency = String.raw`(?:US\$|C\$|A\$|MX\$|R\$|\$|€|£|¥|₹|CHF|USD|EUR|GBP|CAD|AUD|AED|JPY|CNY|RMB|INR|BRL|MXN)`;
   const regexes = [
@@ -105,7 +110,7 @@ function collectExplicitCandidates(text: string, fallbackCurrency?: string) {
     new RegExp(`(${token})\\s*(${currency})`, "gi"),
   ];
 
-  const candidates: Array<{ value: number; currency?: string; index: number; confidence: "confirmed" }> = [];
+  const output: Candidate[] = [];
   for (const regex of regexes) {
     for (const match of text.matchAll(regex)) {
       const amountRaw = match[2] && /\d/.test(match[2]) ? match[2] : match[1];
@@ -113,40 +118,37 @@ function collectExplicitCandidates(text: string, fallbackCurrency?: string) {
       const value = parseLocalizedInteger(amountRaw);
       if (!value || value < 20_000 || value > 250_000_000) continue;
       const index = match.index ?? 0;
-      const context = text.slice(Math.max(0, index - 45), Math.min(text.length, index + match[0].length + 55));
-      if (looksLikeRecurringCharge(context) || looksLikeUnitPrice(context)) continue;
-      candidates.push({ value, currency: currencyFromContext(markerRaw, fallbackCurrency), index, confidence: "confirmed" });
+      const context = text.slice(Math.max(0, index - 90), Math.min(text.length, index + match[0].length + 100));
+      output.push({
+        value,
+        currency: currencyFromContext(markerRaw, fallbackCurrency),
+        index,
+        score: candidateScore(context, value) + 5,
+      });
     }
   }
-  return candidates;
+
+  const phrase = /(?:asking price|listing price|sale price|listed at|for sale at|price|prix|à vendre à|a vendre a)\s*[:\-]?\s*(\d{1,3}(?:[\s\u00a0\u202f.,]\d{3})+|\d{4,9}|\d{1,3}(?:[.,]\d{1,2})?\s*[kKmM])/gi;
+  for (const match of text.matchAll(phrase)) {
+    const value = parseLocalizedInteger(match[1] ?? "");
+    if (!value || value < 20_000 || value > 250_000_000) continue;
+    const index = match.index ?? 0;
+    const context = text.slice(Math.max(0, index - 90), Math.min(text.length, index + match[0].length + 100));
+    output.push({ value, currency: fallbackCurrency, index, score: candidateScore(context, value) + 8 });
+  }
+
+  return output.sort((a, b) => b.score - a.score || a.index - b.index);
 }
 
 export function parsePriceFromText(text: string, fallbackCurrency?: string): ParsedPrice {
   const normalized = normalizeSpaces(text);
-  const candidates = collectExplicitCandidates(normalized, fallbackCurrency);
-
-  if (candidates.length) {
-    // Prefer early values: title/snippet lead almost always contains the listing price.
-    candidates.sort((a, b) => a.index - b.index);
-    const best = candidates[0];
-    return { value: best.value, currency: best.currency ?? fallbackCurrency, confidence: "confirmed" };
-  }
-
-  // Conservative phrase fallback. Do not parse arbitrary bare numbers.
-  const phrase = normalized.match(
-    /(?:asking price|listed at|for sale at|price|prix|à vendre à|a vendre a)\s*[:\-]?\s*(\d{1,3}(?:[\s\u00a0\u202f.,]\d{3})+|\d{4,9}|\d{1,3}(?:[.,]\d{1,2})?\s*[kKmM])/i,
-  );
-  if (phrase?.[1]) {
-    const value = parseLocalizedInteger(phrase[1]);
-    if (value && value >= 20_000 && value <= 250_000_000) {
-      const context = phrase[0];
-      if (!looksLikeRecurringCharge(context) && !looksLikeUnitPrice(context)) {
-        return { value, currency: fallbackCurrency, confidence: "snippet" };
-      }
-    }
-  }
-
-  return { confidence: "none", currency: fallbackCurrency };
+  const best = collectCandidates(normalized, fallbackCurrency)[0];
+  if (!best || best.score < 0) return { confidence: "none", currency: fallbackCurrency };
+  return {
+    value: best.value,
+    currency: best.currency ?? fallbackCurrency,
+    confidence: best.score >= 9 ? "confirmed" : "snippet",
+  };
 }
 
 export function sanitizePropertyPrice(
@@ -158,8 +160,7 @@ export function sanitizePropertyPrice(
   if (!value || !Number.isFinite(value)) return undefined;
   if (value < 20_000 || value > 250_000_000) return undefined;
 
-  // Very high prices are allowed only with an explicit currency marker.
-  const softCeilings: Record<string, number> = {
+  const ceiling: Record<string, number> = {
     EUR: 30_000_000,
     GBP: 30_000_000,
     USD: 60_000_000,
@@ -168,8 +169,7 @@ export function sanitizePropertyPrice(
     CHF: 35_000_000,
     AED: 220_000_000,
   };
-  const ceiling = softCeilings[currency ?? ""] ?? 50_000_000;
-  if (value > ceiling && confidence !== "confirmed") return undefined;
+  if (value > (ceiling[currency ?? ""] ?? 50_000_000) && confidence !== "confirmed") return undefined;
 
   if (surface && surface >= 20) {
     const ppm2 = value / surface;
@@ -183,7 +183,8 @@ export function sanitizePropertyPrice(
       AED: 150_000,
       JPY: 20_000_000,
     };
-    if (ppm2 > (maxPpm2[currency ?? ""] ?? 120_000)) return undefined;
+    const minPpm2 = currency === "JPY" ? 3_000 : 100;
+    if (ppm2 > (maxPpm2[currency ?? ""] ?? 120_000) || ppm2 < minPpm2) return undefined;
   }
 
   return Math.round(value);
