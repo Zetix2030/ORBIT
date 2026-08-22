@@ -3,18 +3,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { detectLocationWithAI } from "@/lib/search/location";
 import { parsePriceFromText, sanitizePropertyPrice } from "@/lib/search/price";
 
-type SearXNGResult = {
+type SearchResult = {
   url?: string;
   title?: string;
   content?: string;
-  score?: number;
-  engine?: string;
-  engines?: string[];
   thumbnail?: string;
   img_src?: string;
 };
-
-type SearXNGResponse = { query?: string; results?: SearXNGResult[] };
 
 type FilterOverrides = {
   budgetMin?: number;
@@ -90,7 +85,7 @@ type Listing = {
 };
 
 const TARGET = 10;
-const PAGE_ENRICH_LIMIT = 16;
+const PAGE_ENRICH_LIMIT = 12;
 
 const COUNTRY_DOMAINS: Record<string, string[]> = {
   France: ["seloger.com", "bienici.com", "ouestfrance-immo.com", "leboncoin.fr", "orpi.com", "century21.fr"],
@@ -142,8 +137,26 @@ function norm(value: unknown) {
   return clean(value).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function decodeHtml(value: string) {
+  return value
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function stripTags(value: string) {
+  return clean(decodeHtml(value.replace(/<[^>]+>/g, " ")));
+}
+
 function host(url: string) {
-  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return "web"; }
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "web";
+  }
 }
 
 function numeric(value: unknown) {
@@ -162,7 +175,6 @@ function lastMatchNumber(query: string, regex: RegExp) {
 async function parseCriteria(query: string, overrides: FilterOverrides = {}): Promise<Criteria> {
   const q = norm(query);
   const location = await detectLocationWithAI(query, process.env.OPENAI_API_KEY);
-
   const explicitMinSurface = lastMatchNumber(q, /(?:surface\s*)?(?:minimum|min\.?|au moins|at least)\s*(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|sqm|sq\s*m)/gi);
   const explicitMaxSurface = lastMatchNumber(q, /(?:surface\s*)?(?:maximum|max\.?|jusqu(?:a|')a|up to)\s*(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|sqm|sq\s*m)/gi);
   const anySurface = lastMatchNumber(q, /(\d{2,4}(?:[.,]\d+)?)\s*(?:m2|m²|metres? carres?|sqm|sq\s*m)/gi);
@@ -211,10 +223,9 @@ function collectSurfaceCandidates(text: string, criteria: Criteria) {
     const value = numeric(match[1]);
     if (!value) continue;
     const index = match.index ?? 0;
-    const context = norm(text.slice(Math.max(0, index - 55), Math.min(text.length, index + match[0].length + 55)));
+    const context = norm(text.slice(Math.max(0, index - 70), Math.min(text.length, index + match[0].length + 70)));
     if (/\b(terrain|parcelle|land|plot|lot|garden size|jardin de|acre|hectare|grounds?)\b/.test(context)) continue;
-    const maxLiving = criteria.minSurface && criteria.minSurface > 1000 ? 5000 : 1200;
-    if (value < 10 || value > maxLiving) continue;
+    if (value < 10 || value > 1200) continue;
     let confidence = 2;
     if (/\b(surface habitable|living area|interior|habitable|floor area|living space|interior size)\b/.test(context)) confidence += 5;
     if (criteria.minSurface) confidence += Math.max(0, 3 - Math.abs(value - criteria.minSurface) / Math.max(50, criteria.minSurface));
@@ -226,7 +237,7 @@ function collectSurfaceCandidates(text: string, criteria: Criteria) {
     const sqft = Number(match[1].replace(/,/g, ""));
     if (!Number.isFinite(sqft) || sqft < 150 || sqft > 30000) continue;
     const index = match.index ?? 0;
-    const context = norm(text.slice(Math.max(0, index - 55), Math.min(text.length, index + match[0].length + 55)));
+    const context = norm(text.slice(Math.max(0, index - 70), Math.min(text.length, index + match[0].length + 70)));
     if (/\b(lot|land|plot|acre|lot size|grounds?)\b/.test(context)) continue;
     const value = Math.round(sqft * 0.092903 * 10) / 10;
     if (value < 10 || value > 1200) continue;
@@ -280,7 +291,7 @@ function sourceTrust(domain: string, country?: string) {
   return 0;
 }
 
-function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
+function toListing(result: SearchResult, criteria: Criteria): Listing | null {
   if (!result.url) return null;
   const title = clean(result.title) || "Annonce immobilière";
   const description = clean(result.content);
@@ -306,7 +317,7 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
   let valueScore = 50 + sourceTrust(domain, criteria.country);
 
   if (criteria.city) {
-    if (norm(combined).includes(norm(criteria.city))) {
+    if (norm(`${combined} ${result.url}`).includes(norm(criteria.city))) {
       matchScore += 23;
       reasons.push(`${criteria.city} détecté dans l'annonce`);
     } else {
@@ -314,7 +325,6 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
       compromises.push(`${criteria.city} non confirmé dans l'extrait`);
     }
   }
-  if (criteria.country && norm(combined).includes(norm(criteria.country))) matchScore += 5;
 
   if (criteria.propertyType === "house") {
     if (kind === "existing_house" || kind === "villa") {
@@ -323,36 +333,19 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
     } else if (kind === "apartment") {
       matchScore -= 30;
       compromises.push("Semble être un appartement");
-    } else compromises.push("Type exact non confirmé");
+    }
   }
 
-  if (criteria.minSurface) {
-    if (surface !== undefined) {
-      if (surface >= criteria.minSurface) {
-        matchScore += 14;
-        reasons.push(`${surface} m² habitables détectés`);
-      } else {
-        const gap = (criteria.minSurface - surface) / criteria.minSurface;
-        if (gap <= 0.1) {
-          matchScore += 4;
-          compromises.push(`${surface} m², légèrement sous ${criteria.minSurface} m²`);
-        } else if (gap <= 0.25) {
-          matchScore -= 5;
-          compromises.push(`${surface} m² sous le minimum souhaité`);
-        } else {
-          matchScore -= 14;
-          compromises.push(`Surface nettement sous ${criteria.minSurface} m²`);
-        }
-      }
-    } else compromises.push("Surface habitable non confirmée");
+  if (criteria.minSurface && surface !== undefined) {
+    if (surface >= criteria.minSurface) matchScore += 14;
+    else {
+      const gap = (criteria.minSurface - surface) / criteria.minSurface;
+      matchScore += gap <= 0.1 ? 4 : gap <= 0.25 ? -5 : -14;
+      compromises.push(`${surface} m² sous le minimum souhaité`);
+    }
   }
+  if (criteria.maxSurface && surface !== undefined && surface > criteria.maxSurface) matchScore -= 10;
 
-  if (criteria.maxSurface && surface !== undefined && surface > criteria.maxSurface) {
-    matchScore -= 10;
-    compromises.push(`Surface supérieure au maximum de ${criteria.maxSurface} m²`);
-  }
-
-  if (criteria.budgetMin && price !== undefined && price < criteria.budgetMin) matchScore -= 3;
   if (criteria.budgetMax && price !== undefined) {
     if (price <= criteria.budgetMax) {
       matchScore += 10;
@@ -360,27 +353,13 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
       reasons.push("Dans le budget");
     } else {
       const over = (price - criteria.budgetMax) / criteria.budgetMax;
-      if (over <= 0.1) compromises.push("Légèrement au-dessus du budget");
-      else {
-        matchScore -= 12;
-        compromises.push("Au-dessus du budget");
-      }
+      matchScore -= over <= 0.1 ? 2 : 12;
+      compromises.push("Au-dessus du budget");
     }
   }
 
-  if (criteria.minBedrooms && bedrooms !== undefined) {
-    if (bedrooms >= criteria.minBedrooms) {
-      matchScore += 8;
-      reasons.push(`${bedrooms} chambres`);
-    } else {
-      matchScore -= 8;
-      compromises.push("Moins de chambres que demandé");
-    }
-  }
-  if (criteria.minBathrooms && bathrooms !== undefined) {
-    if (bathrooms >= criteria.minBathrooms) matchScore += 5;
-    else matchScore -= 5;
-  }
+  if (criteria.minBedrooms && bedrooms !== undefined) matchScore += bedrooms >= criteria.minBedrooms ? 8 : -8;
+  if (criteria.minBathrooms && bathrooms !== undefined) matchScore += bathrooms >= criteria.minBathrooms ? 5 : -5;
 
   const requestedFeatures: Array<[boolean | undefined, boolean, string]> = [
     [criteria.garden, garden, "jardin"],
@@ -396,11 +375,11 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
       reasons.push(`${label} détecté`);
     } else {
       matchScore -= 2;
-      compromises.push(`${label} non confirmé dans l'extrait`);
+      compromises.push(`${label} non confirmé`);
     }
   }
 
-  if (priceResult.confidence === "confirmed" && price !== undefined) reasons.push("Prix détecté avec devise explicite");
+  if (price !== undefined) reasons.push(priceResult.confidence === "confirmed" ? "Prix détecté avec devise explicite" : "Prix détecté dans l'extrait");
   else compromises.push("Prix à vérifier sur l'annonce source");
 
   matchScore = Math.max(0, Math.min(100, Math.round(matchScore)));
@@ -438,57 +417,12 @@ function toListing(result: SearXNGResult, criteria: Criteria): Listing | null {
   };
 }
 
-function decodeHtml(value: string) {
-  return value
-    .replace(/&nbsp;|&#160;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;|&#34;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">");
-}
-
-function pageText(html: string) {
-  const jsonLd = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
-    .map((match) => match[1] ?? "")
-    .join(" ");
-  const meta = [...html.matchAll(/<meta[^>]+(?:content|value)=["']([^"']+)["'][^>]*>/gi)]
-    .map((match) => match[1] ?? "")
-    .join(" ");
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "";
-  const visible = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
-    .replace(/<[^>]+>/g, " ");
-  return decodeHtml(`${title} ${meta} ${jsonLd} ${visible}`).replace(/\s+/g, " ").slice(0, 450_000);
-}
-
-function structuredPriceText(html: string, currency: string) {
-  const chunks: string[] = [];
-  const patterns = [
-    /(?:itemprop|property|name)=["'][^"']*(?:price|amount)[^"']*["'][^>]*(?:content|value)=["']([^"']+)["']/gi,
-    /(?:content|value)=["']([^"']+)["'][^>]*(?:itemprop|property|name)=["'][^"']*(?:price|amount)[^"']*["']/gi,
-    /["']price["']\s*:\s*["']?([0-9][0-9\s.,]*)["']?/gi,
-    /["']priceCurrency["']\s*:\s*["']([A-Z]{3})["']/gi,
-  ];
-  for (const pattern of patterns) {
-    for (const match of html.matchAll(pattern)) {
-      const value = clean(match[1]);
-      if (value) chunks.push(value);
-      if (chunks.length >= 20) break;
-    }
-  }
-  if (!chunks.length) return "";
-  return chunks.map((chunk) => `${currency} ${chunk}`).join(" listing price ");
-}
-
 async function fetchListingHtml(url: string) {
   try {
     const response = await fetch(url, {
       headers: {
         Accept: "text/html,application/xhtml+xml",
-        "User-Agent": "Mozilla/5.0 (compatible; ORBIT/1.0; +https://github.com/Zetix2030/ORBIT)",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
       },
       cache: "no-store",
       redirect: "follow",
@@ -503,54 +437,40 @@ async function fetchListingHtml(url: string) {
   }
 }
 
+function pageText(html: string) {
+  const jsonLd = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)]
+    .map((match) => match[1] ?? "")
+    .join(" ");
+  const meta = [...html.matchAll(/<meta[^>]+(?:content|value)=["']([^"']+)["'][^>]*>/gi)]
+    .map((match) => match[1] ?? "")
+    .join(" ");
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "";
+  return decodeHtml(`${title} ${meta} ${jsonLd}`).replace(/\s+/g, " ").slice(0, 220_000);
+}
+
 async function enrichListing(listing: Listing, criteria: Criteria): Promise<Listing> {
   if (listing.priceConfidence === "confirmed" && listing.surface !== undefined) return listing;
   const html = await fetchListingHtml(listing.url);
   if (!html) return listing;
-
   const text = pageText(html);
-  const structured = structuredPriceText(html, listing.currency ?? criteria.currency);
-  const pagePrice = parsePriceFromText(`${structured} ${text}`, listing.currency ?? criteria.currency);
   const pageSurface = parseSurface(text, criteria);
   const finalSurface = pageSurface ?? listing.surface;
-  const candidatePrice = sanitizePropertyPrice(
-    pagePrice.value,
-    pagePrice.currency ?? listing.currency ?? criteria.currency,
-    finalSurface,
-    pagePrice.confidence,
-  );
-
-  const usePagePrice = candidatePrice !== undefined && (
-    listing.price === undefined ||
-    listing.priceConfidence !== "confirmed" ||
-    pagePrice.confidence === "confirmed"
-  );
-
-  const finalPrice = usePagePrice ? candidatePrice : listing.price;
-  const finalCurrency = usePagePrice ? (pagePrice.currency ?? listing.currency ?? criteria.currency) : listing.currency;
-  const finalConfidence = usePagePrice ? "confirmed" : listing.priceConfidence;
+  const pagePrice = parsePriceFromText(text, listing.currency ?? criteria.currency);
+  const candidatePrice = sanitizePropertyPrice(pagePrice.value, pagePrice.currency ?? listing.currency ?? criteria.currency, finalSurface, pagePrice.confidence);
+  const usePrice = candidatePrice !== undefined && (listing.price === undefined || listing.priceConfidence !== "confirmed" || pagePrice.confidence === "confirmed");
+  const finalPrice = usePrice ? candidatePrice : listing.price;
   const reasons = [...listing.reasons];
-  const compromises = listing.compromises.filter((item) => !/prix/i.test(item));
-
-  if (usePagePrice) reasons.unshift("Prix vérifié sur la page source");
-  else if (finalPrice === undefined) compromises.push("Prix disponible sur l'annonce source");
-
+  if (usePrice) reasons.unshift("Prix vérifié sur la page source");
   return {
     ...listing,
     price: finalPrice,
-    currency: finalCurrency,
+    currency: usePrice ? (pagePrice.currency ?? listing.currency ?? criteria.currency) : listing.currency,
     surface: finalSurface,
     bedrooms: parseBedrooms(text) ?? listing.bedrooms,
     bathrooms: parseBathrooms(text) ?? listing.bathrooms,
-    garden: listing.garden || has(text, /\b(jardin|garden|yard)\b/),
-    garage: listing.garage || has(text, /\bgarage\b/),
-    pool: listing.pool || has(text, /\b(piscine|pool|swimming pool)\b/),
-    terrace: listing.terrace || has(text, /\b(terrasse|terrace|patio)\b/),
-    parking: listing.parking || has(text, /\b(parking|stationnement|carport|driveway)\b/),
     pricePerM2: finalPrice && finalSurface ? Math.round(finalPrice / finalSurface) : undefined,
-    priceConfidence: finalPrice !== undefined ? finalConfidence : "none",
+    priceConfidence: finalPrice !== undefined ? (usePrice ? "confirmed" : listing.priceConfidence) : "none",
     reasons: [...new Set(reasons)].slice(0, 10),
-    compromises: [...new Set(compromises)].slice(0, 10),
   };
 }
 
@@ -559,14 +479,15 @@ async function enrichListings(listings: Listing[], criteria: Criteria) {
     .map((listing, index) => ({ listing, index }))
     .filter(({ listing }) => listing.priceConfidence !== "confirmed" || listing.surface === undefined)
     .slice(0, PAGE_ENRICH_LIMIT);
-
   const enriched = await Promise.all(selected.map(({ listing }) => enrichListing(listing, criteria)));
   const output = [...listings];
-  selected.forEach(({ index }, i) => { output[index] = enriched[i] ?? output[index]; });
+  selected.forEach(({ index }, i) => {
+    output[index] = enriched[i] ?? output[index];
+  });
   return output;
 }
 
-async function searxngSearch(query: string, pageno = 1): Promise<SearXNGResult[]> {
+async function searxngSearch(query: string, pageno = 1): Promise<SearchResult[]> {
   const base = (process.env.SEARXNG_URL ?? "http://localhost:8080").replace(/\/$/, "");
   try {
     const url = new URL(`${base}/search`);
@@ -577,72 +498,107 @@ async function searxngSearch(query: string, pageno = 1): Promise<SearXNGResult[]
     const response = await fetch(url, {
       headers: { Accept: "application/json" },
       cache: "no-store",
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(4500),
     });
     if (!response.ok) return [];
-    const payload = (await response.json()) as SearXNGResponse;
+    const payload = (await response.json()) as { results?: SearchResult[] };
     return Array.isArray(payload.results) ? payload.results : [];
   } catch {
     return [];
   }
 }
 
-function buildQueries(original: string, criteria: Criteria) {
-  const city = criteria.city ?? "";
-  const country = criteria.country ?? "";
-  const areaMetric = criteria.minSurface ? `${criteria.minSurface} m2` : "";
-  const areaImperial = criteria.minSurface && criteria.country === "United States"
-    ? `${Math.round(criteria.minSurface / 0.092903)} sqft`
-    : "";
-  const localTerms = COUNTRY_TERMS[criteria.country ?? ""] ?? "house for sale real estate";
-  const features = [
-    criteria.garden ? "garden" : "",
-    criteria.garage ? "garage" : "",
-    criteria.pool ? "pool" : "",
-    criteria.terrace ? "terrace" : "",
-    criteria.parking ? "parking" : "",
-  ].filter(Boolean).join(" ");
-
-  const queries = [
-    original,
-    [localTerms, city, country, areaMetric, features].filter(Boolean).join(" "),
-    ["house for sale", city, country, areaImperial || areaMetric, features].filter(Boolean).join(" "),
-  ];
-
-  for (const domain of (COUNTRY_DOMAINS[criteria.country ?? ""] ?? []).slice(0, 5)) {
-    queries.push(`site:${domain} ${city} ${areaImperial || areaMetric} ${features} ${criteria.propertyType === "house" ? "house" : "property"}`);
+function unwrapDuckDuckGoUrl(value: string) {
+  try {
+    const decoded = decodeHtml(value);
+    const absolute = decoded.startsWith("//") ? `https:${decoded}` : decoded;
+    const url = new URL(absolute, "https://duckduckgo.com");
+    const uddg = url.searchParams.get("uddg");
+    return uddg ? decodeURIComponent(uddg) : url.href;
+  } catch {
+    return value;
   }
-  return [...new Set(queries.map(clean).filter(Boolean))].slice(0, 8);
 }
 
-function dedupeResults(results: SearXNGResult[]) {
+async function duckDuckGoSearch(query: string): Promise<SearchResult[]> {
+  try {
+    const url = `https://html.duckduckgo.com/html/?${new URLSearchParams({ q: query }).toString()}`;
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(6500),
+    });
+    if (!response.ok) return [];
+    const html = await response.text();
+    const blocks = [...html.matchAll(/<div[^>]+class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi)].slice(0, 20);
+    const results: SearchResult[] = [];
+    for (const block of blocks) {
+      const body = block[1] ?? "";
+      const link = body.match(/<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+      if (!link?.[1]) continue;
+      const snippet = body.match(/<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/i)?.[1] ?? "";
+      const resultUrl = unwrapDuckDuckGoUrl(link[1]);
+      if (!/^https?:\/\//i.test(resultUrl)) continue;
+      results.push({ url: resultUrl, title: stripTags(link[2] ?? ""), content: stripTags(snippet) });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+function buildQueries(original: string, criteria: Criteria) {
+  const location = criteria.location ?? criteria.city ?? "";
+  const terms = COUNTRY_TERMS[criteria.country ?? ""] ?? "house property for sale real estate";
+  const details = [
+    criteria.minSurface ? `${criteria.minSurface} sqm` : "",
+    criteria.budgetMax ? `under ${criteria.budgetMax} ${criteria.currency}` : "",
+    criteria.minBedrooms ? `${criteria.minBedrooms} bedrooms` : "",
+    criteria.pool ? "pool" : "",
+    criteria.garage ? "garage" : "",
+    criteria.garden ? "garden" : "",
+  ].filter(Boolean).join(" ");
+  const domains = criteria.country ? COUNTRY_DOMAINS[criteria.country] ?? [] : [];
+  const portalQueries = domains.slice(0, 4).map((domain) => `site:${domain} ${location} ${terms} ${details}`);
+  return [...new Set([original, `${location} ${terms} ${details}`, `${location} ${criteria.propertyType ?? "house"} ${details} for sale`, ...portalQueries])]
+    .map(clean)
+    .filter(Boolean)
+    .slice(0, 7);
+}
+
+function dedupeResults(results: SearchResult[]) {
   const seen = new Set<string>();
-  const output: SearXNGResult[] = [];
-  for (const item of results) {
-    if (!item.url) continue;
-    let key = item.url;
+  const output: SearchResult[] = [];
+  for (const result of results) {
+    if (!result.url) continue;
+    let key = result.url;
     try {
-      const url = new URL(item.url);
-      url.hash = "";
-      ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"].forEach((param) => url.searchParams.delete(param));
-      key = `${url.origin}${url.pathname}${url.search}`.replace(/\/$/, "");
+      const u = new URL(result.url);
+      u.hash = "";
+      u.searchParams.delete("utm_source");
+      u.searchParams.delete("utm_medium");
+      u.searchParams.delete("utm_campaign");
+      key = `${u.origin}${u.pathname}${u.search}`.replace(/\/$/, "");
     } catch {}
     if (seen.has(key)) continue;
     seen.add(key);
-    output.push(item);
+    output.push(result);
   }
   return output;
 }
 
 function applyStrongFilters(listings: Listing[], criteria: Criteria) {
   return listings.filter((listing) => {
-    if (criteria.budgetMin && listing.price !== undefined && listing.price < criteria.budgetMin) return false;
-    if (criteria.budgetMax && listing.price !== undefined && listing.price > criteria.budgetMax * 1.15) return false;
-    if (criteria.minSurface && listing.surface !== undefined && listing.surface < criteria.minSurface * 0.75) return false;
-    if (criteria.maxSurface && listing.surface !== undefined && listing.surface > criteria.maxSurface * 1.15) return false;
-    if (criteria.minBedrooms && listing.bedrooms !== undefined && listing.bedrooms < criteria.minBedrooms) return false;
-    if (criteria.minBathrooms && listing.bathrooms !== undefined && listing.bathrooms < criteria.minBathrooms) return false;
     if (criteria.propertyType === "house" && listing.propertyKind === "apartment") return false;
+    if (criteria.budgetMin && listing.price !== undefined && listing.price < criteria.budgetMin) return false;
+    if (criteria.budgetMax && listing.price !== undefined && listing.price > criteria.budgetMax * 1.18) return false;
+    if (criteria.minSurface && listing.surface !== undefined && listing.surface < criteria.minSurface * 0.72) return false;
+    if (criteria.maxSurface && listing.surface !== undefined && listing.surface > criteria.maxSurface * 1.18) return false;
+    if (criteria.minBedrooms && listing.bedrooms !== undefined && listing.bedrooms < Math.max(1, criteria.minBedrooms - 1)) return false;
+    if (criteria.minBathrooms && listing.bathrooms !== undefined && listing.bathrooms < Math.max(1, criteria.minBathrooms - 1)) return false;
     return true;
   });
 }
@@ -664,38 +620,42 @@ export async function proxy(request: NextRequest) {
 
     const criteria = await parseCriteria(query, filters);
     const queries = buildQueries(query, criteria);
-    const firstPass = await Promise.all(queries.map((searchQuery) => searxngSearch(searchQuery, 1)));
-    let unique = dedupeResults(firstPass.flat());
 
-    if (unique.length < 25) {
-      const secondPass = await Promise.all(queries.slice(0, 4).map((searchQuery) => searxngSearch(searchQuery, 2)));
-      unique = dedupeResults([...unique, ...secondPass.flat()]);
+    const searxFirst = await Promise.all(queries.map((searchQuery) => searxngSearch(searchQuery, 1)));
+    let unique = dedupeResults(searxFirst.flat());
+    let provider = "SearXNG";
+
+    if (unique.length < 12) {
+      const ddg = await Promise.all(queries.slice(0, 5).map((searchQuery) => duckDuckGoSearch(searchQuery)));
+      unique = dedupeResults([...unique, ...ddg.flat()]);
+      provider = unique.length > searxFirst.flat().length ? "SearXNG + DuckDuckGo" : provider;
     }
+
+    if (unique.length < 20) {
+      const searxSecond = await Promise.all(queries.slice(0, 3).map((searchQuery) => searxngSearch(searchQuery, 2)));
+      unique = dedupeResults([...unique, ...searxSecond.flat()]);
+    }
+
+    // Critical safety: when free providers are unavailable, do not swallow the
+    // original /api/search route. Let the route's own fallback logic run.
+    if (unique.length === 0) return NextResponse.next();
 
     let listings = unique.map((result) => toListing(result, criteria)).filter((item): item is Listing => Boolean(item));
     listings.sort((a, b) => b.orbitScore - a.orbitScore);
     listings = await enrichListings(listings.slice(0, 24), criteria);
 
     const stronglyFiltered = applyStrongFilters(listings, criteria);
-    listings = stronglyFiltered.length >= 4 ? stronglyFiltered : listings;
+    if (stronglyFiltered.length >= 4) listings = stronglyFiltered;
 
     if (criteria.sortPriority === "lowest_price") {
       listings.sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER) || b.orbitScore - a.orbitScore);
     } else if (criteria.sortPriority === "largest") {
-      listings.sort((a, b) => (b.surface ?? 0) - (a.surface ?? 0) || priceQuality(b) - priceQuality(a) || b.orbitScore - a.orbitScore);
+      listings.sort((a, b) => (b.surface ?? 0) - (a.surface ?? 0) || b.orbitScore - a.orbitScore);
     } else {
       listings.sort((a, b) => priceQuality(b) - priceQuality(a) || b.orbitScore - a.orbitScore);
     }
 
-    const reliable = listings.filter((listing) => priceQuality(listing) > 0);
-    if (reliable.length >= TARGET) listings = reliable;
-    else if (reliable.length >= 6) {
-      const reliableUrls = new Set(reliable.map((listing) => listing.url));
-      listings = [...reliable, ...listings.filter((listing) => !reliableUrls.has(listing.url))];
-    }
-
     listings = listings.slice(0, TARGET).map((listing, index) => ({ ...listing, id: `listing-${index}` }));
-
     const sources = unique.slice(0, 40).map((source, index) => ({
       id: `source-${index}`,
       title: clean(source.title) || host(source.url ?? ""),
@@ -725,11 +685,11 @@ export async function proxy(request: NextRequest) {
       creditsUsed: null,
       sources,
       listings,
-      searchEngineVersion: "10.0-searxng-page-verification",
-      searchProvider: "SearXNG",
+      searchEngineVersion: "11.0-resilient-free-search",
+      searchProvider: provider,
     });
   } catch (error) {
-    console.error("ORBIT SearXNG proxy error:", error);
+    console.error("ORBIT proxy search error:", error);
     return NextResponse.next();
   }
 }
