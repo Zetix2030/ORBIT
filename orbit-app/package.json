@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "bash scripts/dev-orbit.sh",
+    "next:dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "search:up": "docker compose -f docker-compose.searxng.yml up -d",
-    "search:down": "docker compose -f docker-compose.searxng.yml down"
+    "search:down": "docker compose -f docker-compose.searxng.yml down",
+    "search:logs": "docker compose -f docker-compose.searxng.yml logs -f searxng",
+    "search:status": "docker compose -f docker-compose.searxng.yml ps"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",
