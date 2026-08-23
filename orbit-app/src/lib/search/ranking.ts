@@ -99,8 +99,6 @@ export function orbitRelaxedRank<T extends AnyObject>(listing: T, rawCriteria: A
     else { score -= 14; deviations.push("Nombre de chambres inférieur"); }
   }
 
-  // Missing fields are uncertainty, not automatic rejection. This is critical for
-  // search-snippet candidates where portals often hide price/area until scraping.
   const knownCoreFields = [item.price, item.surface, item.bedrooms].filter(v => v != null).length;
   if (knownCoreFields === 0) score -= 8;
   else if (knownCoreFields === 1) score -= 3;
@@ -114,8 +112,7 @@ export function orbitRelaxedRank<T extends AnyObject>(listing: T, rawCriteria: A
 export function orbitRelaxedFallback<T extends AnyObject>(currentResults: T[], candidates: T[], criteria: AnyObject, target = 10, mode: OrbitSearchMode = "balanced"): T[] {
   const ranked = candidates.map(listing => orbitRelaxedRank(listing, criteria)).sort((a,b) => b.orbitRelaxedScore-a.orbitRelaxedScore);
   if (mode === "strict") return currentResults.slice(0,target);
-  // Balanced must rescue useful candidates instead of returning zero merely because
-  // extraction was incomplete. Broad remains the final safety net.
+
   const minimumScore = mode === "broad" ? 12 : 22;
   const output:T[] = [...currentResults];
   const seen = new Set<string>();
@@ -126,11 +123,12 @@ export function orbitRelaxedFallback<T extends AnyObject>(currentResults: T[], c
     if (rankedItem.orbitRelaxedScore < minimumScore) continue;
     const itemKey=key(rankedItem);
     if (seen.has(itemKey)) continue;
-    seen.add(itemKey); output.push(rankedItem as T);
+    seen.add(itemKey);
+    output.push(rankedItem as T);
   }
-  // Last-resort availability guarantee: if candidates exist, ORBIT should expose the
-  // best ones rather than claim there are no results. They stay marked as relaxed.
-  if (output.length === 0 && ranked.length > 0 && mode !== "strict") {
+
+  // At this point strict mode has already returned, so mode can only be balanced/broad.
+  if (output.length === 0 && ranked.length > 0) {
     for (const item of ranked.slice(0,target)) output.push(item as T);
   }
   return output.slice(0,target);
