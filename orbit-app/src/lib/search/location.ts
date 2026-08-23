@@ -4,112 +4,175 @@ export type LocationIntent = {
   currency?: string;
 };
 
-const COUNTRY_ALIASES: Array<{country:string; currency:string; aliases:string[]}> = [
-  {country:"United States",currency:"USD",aliases:["usa","u.s.a","us","u.s.","united states","united states of america","etats-unis","états-unis","etats unis","états unis","amerique","amérique"]},
-  {country:"France",currency:"EUR",aliases:["france"]},
-  {country:"United Kingdom",currency:"GBP",aliases:["uk","u.k.","united kingdom","royaume-uni","royaume uni","england","angleterre","scotland","wales"]},
-  {country:"Canada",currency:"CAD",aliases:["canada"]},
-  {country:"Germany",currency:"EUR",aliases:["germany","allemagne","deutschland"]},
-  {country:"Spain",currency:"EUR",aliases:["spain","espagne","espana","españa"]},
-  {country:"Portugal",currency:"EUR",aliases:["portugal"]},
-  {country:"Italy",currency:"EUR",aliases:["italy","italie","italia"]},
-  {country:"Belgium",currency:"EUR",aliases:["belgium","belgique","belgie","belgië"]},
-  {country:"Netherlands",currency:"EUR",aliases:["netherlands","pays-bas","pays bas","nederland"]},
-  {country:"Switzerland",currency:"CHF",aliases:["switzerland","suisse","schweiz","svizzera"]},
-  {country:"Austria",currency:"EUR",aliases:["austria","autriche","osterreich","österreich"]},
-  {country:"Ireland",currency:"EUR",aliases:["ireland","irlande"]},
-  {country:"Australia",currency:"AUD",aliases:["australia","australie"]},
-  {country:"New Zealand",currency:"NZD",aliases:["new zealand","nouvelle-zelande","nouvelle zélande"]},
-  {country:"Mexico",currency:"MXN",aliases:["mexico","mexique"]},
-  {country:"Brazil",currency:"BRL",aliases:["brazil","bresil","brésil","brasil"]},
-  {country:"Argentina",currency:"ARS",aliases:["argentina","argentine"]},
-  {country:"Chile",currency:"CLP",aliases:["chile","chili"]},
-  {country:"Colombia",currency:"COP",aliases:["colombia","colombie"]},
-  {country:"United Arab Emirates",currency:"AED",aliases:["uae","united arab emirates","emirats arabes unis","émirats arabes unis","dubai"]},
-  {country:"Saudi Arabia",currency:"SAR",aliases:["saudi arabia","arabie saoudite"]},
-  {country:"Morocco",currency:"MAD",aliases:["morocco","maroc"]},
-  {country:"Algeria",currency:"DZD",aliases:["algeria","algerie","algérie"]},
-  {country:"Tunisia",currency:"TND",aliases:["tunisia","tunisie"]},
-  {country:"South Africa",currency:"ZAR",aliases:["south africa","afrique du sud"]},
-  {country:"Turkey",currency:"TRY",aliases:["turkey","turquie","turkiye","türkiye"]},
-  {country:"Greece",currency:"EUR",aliases:["greece","grece","grèce"]},
-  {country:"Poland",currency:"PLN",aliases:["poland","pologne","polska"]},
-  {country:"Czechia",currency:"CZK",aliases:["czechia","czech republic","republique tcheque","république tchèque"]},
-  {country:"Japan",currency:"JPY",aliases:["japan","japon"]},
-  {country:"South Korea",currency:"KRW",aliases:["south korea","coree du sud","corée du sud","korea"]},
-  {country:"China",currency:"CNY",aliases:["china","chine"]},
-  {country:"India",currency:"INR",aliases:["india","inde"]},
-  {country:"Thailand",currency:"THB",aliases:["thailand","thailande","thaïlande"]},
-  {country:"Singapore",currency:"SGD",aliases:["singapore","singapour"]},
+const FRENCH_CITIES = [
+  "Paris",
+  "Marseille",
+  "Lyon",
+  "Toulouse",
+  "Nice",
+  "Nantes",
+  "Montpellier",
+  "Strasbourg",
+  "Bordeaux",
+  "Lille",
+  "Rennes",
+  "Reims",
+  "Saint-Étienne",
+  "Toulon",
+  "Le Havre",
+  "Grenoble",
+  "Dijon",
+  "Angers",
+  "Nîmes",
+  "Villeurbanne",
+  "Clermont-Ferrand",
+  "Le Mans",
+  "Aix-en-Provence",
+  "Brest",
+  "Tours",
+  "Amiens",
+  "Limoges",
+  "Annecy",
+  "Perpignan",
+  "Metz",
+  "Besançon",
+  "Orléans",
+  "Rouen",
+  "Mulhouse",
+  "Caen",
+  "Nancy",
+  "Argenteuil",
+  "Montreuil",
+  "Roubaix",
+  "Tourcoing",
+  "Avignon",
+  "Poitiers",
+  "Versailles",
+  "Pau",
+  "La Rochelle",
+  "Lorient",
+  "Quimper",
+  "Vannes",
+  "Saint-Brieuc",
+  "Saint-Malo",
+  "Morlaix",
+  "Concarneau",
+  "Landerneau",
+  "Plougastel-Daoulas",
+  "Guipavas",
+  "Le Relecq-Kerhuon",
 ];
 
-const CITY_COUNTRY: Record<string, LocationIntent> = {
-  "miami":{city:"Miami",country:"United States",currency:"USD"},
-  "new york":{city:"New York",country:"United States",currency:"USD"},
-  "los angeles":{city:"Los Angeles",country:"United States",currency:"USD"},
-  "washington":{city:"Washington",country:"United States",currency:"USD"},
-  "london":{city:"London",country:"United Kingdom",currency:"GBP"},
-  "londres":{city:"London",country:"United Kingdom",currency:"GBP"},
-  "paris":{city:"Paris",country:"France",currency:"EUR"},
-  "brest":{city:"Brest",country:"France",currency:"EUR"},
-  "lyon":{city:"Lyon",country:"France",currency:"EUR"},
-  "marseille":{city:"Marseille",country:"France",currency:"EUR"},
-  "berlin":{city:"Berlin",country:"Germany",currency:"EUR"},
-  "madrid":{city:"Madrid",country:"Spain",currency:"EUR"},
-  "barcelona":{city:"Barcelona",country:"Spain",currency:"EUR"},
-  "lisbon":{city:"Lisbon",country:"Portugal",currency:"EUR"},
-  "lisbonne":{city:"Lisbon",country:"Portugal",currency:"EUR"},
-  "rome":{city:"Rome",country:"Italy",currency:"EUR"},
-  "milan":{city:"Milan",country:"Italy",currency:"EUR"},
-  "dubai":{city:"Dubai",country:"United Arab Emirates",currency:"AED"},
-  "tokyo":{city:"Tokyo",country:"Japan",currency:"JPY"},
-  "sydney":{city:"Sydney",country:"Australia",currency:"AUD"},
-  "toronto":{city:"Toronto",country:"Canada",currency:"CAD"},
-  "montreal":{city:"Montreal",country:"Canada",currency:"CAD"},
-};
-
-function norm(value:string){return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[’']/g,"'").trim();}
-
-export function detectLocationDeterministically(query:string): LocationIntent {
-  const q=norm(query);
-  let result:LocationIntent={};
-  for(const [key,value] of Object.entries(CITY_COUNTRY)){
-    if(q.includes(norm(key))){ result={...value}; break; }
-  }
-  for(const entry of COUNTRY_ALIASES){
-    if(entry.aliases.some(alias=>new RegExp(`(^|\\W)${norm(alias).replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?=\\W|$)`,"i").test(q))){
-      result.country=entry.country; result.currency=entry.currency; break;
-    }
-  }
-  return result;
+function norm(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’']/g, "'")
+    .trim();
 }
 
-export async function detectLocationWithAI(query:string, apiKey?:string):Promise<LocationIntent>{
-  const fallback=detectLocationDeterministically(query);
-  if(!apiKey) return fallback;
-  try{
-    const response=await fetch("https://api.openai.com/v1/chat/completions",{
-      method:"POST",
-      headers:{Authorization:`Bearer ${apiKey}`,"Content-Type":"application/json"},
-      body:JSON.stringify({
-        model:"gpt-4o-mini",
-        temperature:0,
-        response_format:{type:"json_object"},
-        messages:[
-          {role:"system",content:"Extract real-estate location from the user's query. Return JSON only with city, country (English canonical country name), currency (ISO 4217). Never assume France just because the query is French. If a country is explicit, respect it. If a city clearly implies a country (Miami=United States, London=United Kingdom), infer it. Omit unknown fields."},
-          {role:"user",content:query}
-        ]
+function titleCaseCity(value: string) {
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(/([ -])/)
+    .map((part) =>
+      /[ -]/.test(part)
+        ? part
+        : part
+            .split("'")
+            .map((word) =>
+              word ? `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}` : word,
+            )
+            .join("'"),
+    )
+    .join("");
+}
+
+function knownFrenchCity(query: string) {
+  const q = norm(query);
+  for (const city of FRENCH_CITIES) {
+    if (q.includes(norm(city))) return city;
+  }
+  return undefined;
+}
+
+function heuristicFrenchCity(query: string) {
+  const patterns = [
+    /(?:\bà|\ba|\bsur|\bvers|\bautour de|\bproche de|\bprès de)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’ -]{1,45})/i,
+    /(?:maison|appartement|villa|bien|immobilier)\s+(?:à|a|sur)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’ -]{1,45})/i,
+  ];
+
+  const stopWords = /\s+(?:moins|sous|budget|prix|avec|sans|minimum|min\.?|maximum|max\.?|de\s+\d|\d+\s*(?:m2|m²|chambres?))/i;
+
+  for (const pattern of patterns) {
+    const match = query.match(pattern)?.[1];
+    if (!match) continue;
+    const cleaned = match.split(stopWords)[0]?.trim().replace(/[,.]+$/, "");
+    if (!cleaned || cleaned.length < 2 || cleaned.length > 45) continue;
+    return titleCaseCity(cleaned);
+  }
+
+  return undefined;
+}
+
+export function detectLocationDeterministically(query: string): LocationIntent {
+  return {
+    city: knownFrenchCity(query) ?? heuristicFrenchCity(query),
+    country: "France",
+    currency: "EUR",
+  };
+}
+
+export async function detectLocationWithAI(
+  query: string,
+  apiKey?: string,
+): Promise<LocationIntent> {
+  const fallback = detectLocationDeterministically(query);
+  if (!apiKey) return fallback;
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "ORBIT recherche désormais uniquement des biens immobiliers situés en France. Extrais uniquement la commune française demandée. Retourne un JSON {city}. Si la requête vise clairement une ville hors de France, n'invente aucune ville française et retourne {}. N'ajoute jamais un autre pays ni une autre devise.",
+          },
+          { role: "user", content: query },
+        ],
       }),
     });
-    if(!response.ok) return fallback;
-    const payload=await response.json() as {choices?:Array<{message?:{content?:string}}>};
-    const content=payload.choices?.[0]?.message?.content;
-    if(!content) return fallback;
-    const parsed=JSON.parse(content) as LocationIntent;
-    return {
-      city: typeof parsed.city==="string"&&parsed.city.trim()?parsed.city.trim():fallback.city,
-      country: typeof parsed.country==="string"&&parsed.country.trim()?parsed.country.trim():fallback.country,
-      currency: typeof parsed.currency==="string"&&/^[A-Z]{3}$/.test(parsed.currency)?parsed.currency:fallback.currency,
+
+    if (!response.ok) return fallback;
+    const payload = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
     };
-  }catch{return fallback;}
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) return fallback;
+
+    const parsed = JSON.parse(content) as { city?: unknown };
+    const city =
+      typeof parsed.city === "string" && parsed.city.trim()
+        ? titleCaseCity(parsed.city)
+        : fallback.city;
+
+    return {
+      city,
+      country: "France",
+      currency: "EUR",
+    };
+  } catch {
+    return fallback;
+  }
 }
