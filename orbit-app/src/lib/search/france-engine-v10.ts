@@ -179,7 +179,7 @@ function compatible(text: string, criteria?: Criteria) {
 
 function fitBand(surface: number | undefined, bedrooms: number | undefined, criteria?: Criteria) {
   if (criteria?.minSurface && surface !== undefined) {
-    const floor = criteria.minSurface * 0.82; // 140m² => refuse < 115m²
+    const floor = criteria.minSurface * 0.82;
     if (surface < floor) return false;
   }
   if (criteria?.maxSurface && surface !== undefined && surface > criteria.maxSurface * 1.08) return false;
@@ -252,8 +252,6 @@ function candidateToListing(result: SearxResult, evidence: Evidence | null, crit
   if (!price) return null;
   if (criteria?.budgetMin !== undefined && price < criteria.budgetMin) return null;
   if (criteria?.budgetMax !== undefined && price > criteria.budgetMax) return null;
-
-  // A price is only accepted when it comes from the source page or is explicitly present on the exact SearX result URL.
   if (!evidence?.price && !snippetPrice) return null;
 
   const image = evidence?.image ?? safeImage(result.thumbnail || result.img_src || "", result.url);
@@ -333,7 +331,7 @@ function sortListings(listings: Listing[], priority?: Criteria["sortPriority"]) 
 
 export async function franceSearchProxyV10(request: NextRequest) {
   try {
-    const base = await franceSearchProxyV9(request.clone());
+    const base = await franceSearchProxyV9(request);
     const payload = await base.json() as Payload;
     if (!base.ok || !payload.success) return NextResponse.json(payload,{status:base.status});
 
