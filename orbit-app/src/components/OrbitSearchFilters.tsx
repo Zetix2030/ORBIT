@@ -15,7 +15,6 @@ type FilterState = {
   pool: boolean;
   terrace: boolean;
   parking: boolean;
-  sortPriority: "best_match" | "lowest_price" | "largest";
 };
 
 const EMPTY: FilterState = {
@@ -30,7 +29,6 @@ const EMPTY: FilterState = {
   pool: false,
   terrace: false,
   parking: false,
-  sortPriority: "best_match",
 };
 
 function findCriteriaPanel(): HTMLElement | null {
@@ -52,25 +50,7 @@ function setReactInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function buildSuffix(filters: FilterState) {
-  const parts: string[] = [];
-  if (filters.budgetMin) parts.push(`prix minimum ${filters.budgetMin}`);
-  if (filters.budgetMax) parts.push(`budget max ${filters.budgetMax}`);
-  if (filters.minSurface) parts.push(`surface minimum ${filters.minSurface} m2`);
-  if (filters.maxSurface) parts.push(`surface maximum ${filters.maxSurface} m2`);
-  if (filters.minBedrooms) parts.push(`${filters.minBedrooms} chambres`);
-  if (filters.minBathrooms) parts.push(`${filters.minBathrooms} salles de bain`);
-  if (filters.garden) parts.push("jardin");
-  if (filters.garage) parts.push("garage");
-  if (filters.pool) parts.push("piscine");
-  if (filters.terrace) parts.push("terrasse");
-  if (filters.parking) parts.push("parking");
-  if (filters.sortPriority === "lowest_price") parts.push("tri prix croissant");
-  if (filters.sortPriority === "largest") parts.push("tri plus grande surface");
-  return parts.join(", ");
-}
-
-function stripFilterSuffix(query: string) {
+function stripLegacySuffix(query: string) {
   return query.replace(/\s*\|\s*filtres ORBIT\s*:\s*.*$/i, "").trim();
 }
 
@@ -82,6 +62,10 @@ function loadSaved(): FilterState {
   } catch {
     return EMPTY;
   }
+}
+
+function hasActiveFilters(filters: FilterState) {
+  return Object.values(filters).some((value) => typeof value === "boolean" ? value : Boolean(value));
 }
 
 export default function OrbitSearchFilters() {
@@ -98,23 +82,57 @@ export default function OrbitSearchFilters() {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const originalFetch = window.fetch.bind(window);
+
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+      if (/\/api\/search(?:\?|$)/.test(url) && typeof init?.body === "string") {
+        try {
+          const body = JSON.parse(init.body) as Record<string, unknown>;
+          const saved = loadSaved();
+          const cleanQuery = typeof body.query === "string" ? stripLegacySuffix(body.query) : body.query;
+          const nextBody: Record<string, unknown> = { ...body, query: cleanQuery };
+          if (hasActiveFilters(saved)) nextBody.filters = saved;
+          else delete nextBody.filters;
+          return originalFetch(input, { ...init, body: JSON.stringify(nextBody) });
+        } catch {
+          return originalFetch(input, init);
+        }
+      }
+
+      return originalFetch(input, init);
+    };
+
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
+
   const activeCount = useMemo(
-    () => Object.entries(filters).filter(([key, value]) => {
-      if (key === "sortPriority") return value !== "best_match";
-      return typeof value === "boolean" ? value : Boolean(value);
-    }).length,
+    () => Object.values(filters).filter((value) => typeof value === "boolean" ? value : Boolean(value)).length,
     [filters],
   );
 
   const activeLabels = useMemo(() => {
     const labels: string[] = [];
+    if (filters.budgetMin) labels.push(`≥ ${Number(filters.budgetMin).toLocaleString("fr-FR")} €`);
     if (filters.budgetMax) labels.push(`≤ ${Number(filters.budgetMax).toLocaleString("fr-FR")} €`);
     if (filters.minSurface) labels.push(`≥ ${filters.minSurface} m²`);
+    if (filters.maxSurface) labels.push(`≤ ${filters.maxSurface} m²`);
     if (filters.minBedrooms) labels.push(`${filters.minBedrooms}+ ch.`);
+    if (filters.minBathrooms) labels.push(`${filters.minBathrooms}+ SDB`);
     if (filters.garden) labels.push("Jardin");
     if (filters.garage) labels.push("Garage");
     if (filters.pool) labels.push("Piscine");
-    return labels.slice(0, 5);
+    if (filters.terrace) labels.push("Terrasse");
+    if (filters.parking) labels.push("Parking");
+    return labels.slice(0, 7);
   }, [filters]);
 
   if (!target) return null;
@@ -123,33 +141,29 @@ export default function OrbitSearchFilters() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
-  function runSearch(nextQuery: string) {
+  function runSearch() {
     const input = getResultsInput();
     if (!input) return;
-    setReactInputValue(input, nextQuery);
+    const cleanQuery = stripLegacySuffix(input.value);
+    if (cleanQuery !== input.value) setReactInputValue(input, cleanQuery);
     window.setTimeout(() => {
       const container = input.closest("section");
       const button = Array.from(container?.querySelectorAll("button") ?? []).find(
         (item) => item.textContent?.trim() === "Rechercher",
       ) as HTMLButtonElement | undefined;
       button?.click();
-    }, 50);
+    }, 60);
   }
 
   function apply() {
-    const input = getResultsInput();
-    if (!input) return;
-    const base = stripFilterSuffix(input.value);
-    const suffix = buildSuffix(filters);
     window.sessionStorage.setItem("orbit-search-filters", JSON.stringify(filters));
-    runSearch(suffix ? `${base} | filtres ORBIT: ${suffix}` : base);
+    runSearch();
   }
 
   function reset() {
-    const input = getResultsInput();
     setFilters(EMPTY);
     window.sessionStorage.removeItem("orbit-search-filters");
-    if (input) runSearch(stripFilterSuffix(input.value));
+    runSearch();
   }
 
   const fieldClass = "w-full rounded-xl border border-white/[0.08] bg-[#07080a] px-3 py-2.5 text-[11px] text-white/75 outline-none transition placeholder:text-white/18 hover:border-white/[0.12] focus:border-[#9aa3ff]/35 focus:bg-white/[0.025]";
@@ -172,7 +186,7 @@ export default function OrbitSearchFilters() {
           <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.035] text-[11px] text-white/50">⌘</div>
           <div>
             <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/38">Filtres intelligents</div>
-            <div className="mt-1 text-[9px] text-white/22">Affiner les résultats sans repartir de zéro</div>
+            <div className="mt-1 text-[9px] text-white/22">Filtres réels envoyés au moteur ORBIT</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -199,8 +213,8 @@ export default function OrbitSearchFilters() {
           <div className="grid grid-cols-2 gap-2">
             <input className={fieldClass} inputMode="numeric" placeholder="Prix min. €" value={filters.budgetMin} onChange={(e) => update("budgetMin", e.target.value.replace(/\D/g, ""))} />
             <input className={fieldClass} inputMode="numeric" placeholder="Prix max. €" value={filters.budgetMax} onChange={(e) => update("budgetMax", e.target.value.replace(/\D/g, ""))} />
-            <input className={fieldClass} inputMode="numeric" placeholder="m² min." value={filters.minSurface} onChange={(e) => update("minSurface", e.target.value.replace(/[^\d.]/g, ""))} />
-            <input className={fieldClass} inputMode="numeric" placeholder="m² max." value={filters.maxSurface} onChange={(e) => update("maxSurface", e.target.value.replace(/[^\d.]/g, ""))} />
+            <input className={fieldClass} inputMode="decimal" placeholder="m² min." value={filters.minSurface} onChange={(e) => update("minSurface", e.target.value.replace(/[^\d.,]/g, "").replace(",", "."))} />
+            <input className={fieldClass} inputMode="decimal" placeholder="m² max." value={filters.maxSurface} onChange={(e) => update("maxSurface", e.target.value.replace(/[^\d.,]/g, "").replace(",", "."))} />
             <input className={fieldClass} inputMode="numeric" placeholder="Chambres min." value={filters.minBedrooms} onChange={(e) => update("minBedrooms", e.target.value.replace(/\D/g, ""))} />
             <input className={fieldClass} inputMode="numeric" placeholder="SDB min." value={filters.minBathrooms} onChange={(e) => update("minBathrooms", e.target.value.replace(/\D/g, ""))} />
           </div>
@@ -223,15 +237,8 @@ export default function OrbitSearchFilters() {
             })}
           </div>
 
-          <div className="mb-2 mt-4 text-[9px] uppercase tracking-[0.14em] text-white/20">Classement</div>
-          <select className={fieldClass} value={filters.sortPriority} onChange={(e) => update("sortPriority", e.target.value as FilterState["sortPriority"])}>
-            <option value="best_match">Meilleure correspondance ORBIT</option>
-            <option value="lowest_price">Prix le plus bas</option>
-            <option value="largest">Plus grande surface</option>
-          </select>
-
           <div className="mt-4 rounded-xl border border-emerald-400/[0.10] bg-emerald-400/[0.035] px-3 py-2.5 text-[9px] leading-5 text-emerald-100/45">
-            ORBIT France privilégie les annonces individuelles avec prix recoupé et photo rattachée à la fiche.
+            Les filtres sont maintenant appliqués comme de vraies contraintes. ORBIT ne modifie plus le texte de ta recherche pour les simuler.
           </div>
 
           <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
