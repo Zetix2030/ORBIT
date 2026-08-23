@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
-import { franceSearchProxyV6 } from "@/lib/search/france-engine-v6";
+import { franceSearchProxyV7 } from "@/lib/search/france-engine-v7";
 
 export function proxy(request: NextRequest) {
-  return franceSearchProxyV6(request);
+  return franceSearchProxyV7(request);
 }
 
 export const config = {
