@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
+import FranceOnlyUiGuard from "@/components/FranceOnlyUiGuard";
 import OrbitSearchFilters from "@/components/OrbitSearchFilters";
 import OrbitSortDropdown from "@/components/OrbitSortDropdown";
 import "./globals.css";
@@ -18,7 +19,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "ORBIT",
   description:
-    "ORBIT — intelligent search and decision engine.",
+    "ORBIT France — recherche immobilière intelligente et moteur de décision.",
 };
 
 export default function RootLayout({
@@ -32,6 +33,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         {children}
+        <FranceOnlyUiGuard />
         <OrbitSearchFilters />
         <OrbitSortDropdown />
       </body>
