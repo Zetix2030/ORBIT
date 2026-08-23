@@ -108,7 +108,7 @@ export default function OrbitSearchFilters() {
 
   const activeLabels = useMemo(() => {
     const labels: string[] = [];
-    if (filters.budgetMax) labels.push(`≤ ${Number(filters.budgetMax).toLocaleString("fr-FR")}`);
+    if (filters.budgetMax) labels.push(`≤ ${Number(filters.budgetMax).toLocaleString("fr-FR")} €`);
     if (filters.minSurface) labels.push(`≥ ${filters.minSurface} m²`);
     if (filters.minBedrooms) labels.push(`${filters.minBedrooms}+ ch.`);
     if (filters.garden) labels.push("Jardin");
@@ -193,12 +193,12 @@ export default function OrbitSearchFilters() {
         <div className="border-t border-white/[0.055] p-4">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[9px] uppercase tracking-[0.14em] text-white/20">Budget & espace</span>
-            <span className="text-[9px] text-white/18">Devise selon le pays</span>
+            <span className="text-[9px] text-white/18">France • EUR (€)</span>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <input className={fieldClass} inputMode="numeric" placeholder="Prix min." value={filters.budgetMin} onChange={(e) => update("budgetMin", e.target.value.replace(/\D/g, ""))} />
-            <input className={fieldClass} inputMode="numeric" placeholder="Prix max." value={filters.budgetMax} onChange={(e) => update("budgetMax", e.target.value.replace(/\D/g, ""))} />
+            <input className={fieldClass} inputMode="numeric" placeholder="Prix min. €" value={filters.budgetMin} onChange={(e) => update("budgetMin", e.target.value.replace(/\D/g, ""))} />
+            <input className={fieldClass} inputMode="numeric" placeholder="Prix max. €" value={filters.budgetMax} onChange={(e) => update("budgetMax", e.target.value.replace(/\D/g, ""))} />
             <input className={fieldClass} inputMode="numeric" placeholder="m² min." value={filters.minSurface} onChange={(e) => update("minSurface", e.target.value.replace(/[^\d.]/g, ""))} />
             <input className={fieldClass} inputMode="numeric" placeholder="m² max." value={filters.maxSurface} onChange={(e) => update("maxSurface", e.target.value.replace(/[^\d.]/g, ""))} />
             <input className={fieldClass} inputMode="numeric" placeholder="Chambres min." value={filters.minBedrooms} onChange={(e) => update("minBedrooms", e.target.value.replace(/\D/g, ""))} />
@@ -231,7 +231,7 @@ export default function OrbitSearchFilters() {
           </select>
 
           <div className="mt-4 rounded-xl border border-emerald-400/[0.10] bg-emerald-400/[0.035] px-3 py-2.5 text-[9px] leading-5 text-emerald-100/45">
-            ORBIT privilégie maintenant les annonces dont le prix peut être vérifié directement sur la source.
+            ORBIT France privilégie les annonces individuelles avec prix recoupé et photo rattachée à la fiche.
           </div>
 
           <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
