@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import FranceOnlyUiGuard from "@/components/FranceOnlyUiGuard";
 import OrbitSearchFilters from "@/components/OrbitSearchFilters";
 import OrbitSortDropdown from "@/components/OrbitSortDropdown";
+import OrbitPagination from "@/components/OrbitPagination";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -36,6 +37,7 @@ export default function RootLayout({
         <FranceOnlyUiGuard />
         <OrbitSearchFilters />
         <OrbitSortDropdown />
+        <OrbitPagination />
       </body>
     </html>
   );
